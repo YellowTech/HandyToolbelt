@@ -60,7 +60,7 @@ task.arguments = ["-c", "icns", iconset.path, "-o", output.path]
 try task.run(); task.waitUntilExit()
 guard task.terminationStatus == 0 else { exit(task.terminationStatus) }
 if arguments.contains("--preview") {
-    let preview = root.appendingPathComponent("Design/ToolbeltRefinements/approved-preview.png")
+    let preview = root.appendingPathComponent(".build/AppIcon-preview.png")
     try fm.createDirectory(at: preview.deletingLastPathComponent(), withIntermediateDirectories: true)
     try bitmap(width: 900, height: 360) {
         ivory.setFill(); NSRect(x: 0, y: 0, width: 900, height: 360).fill()

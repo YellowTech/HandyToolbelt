@@ -3,8 +3,7 @@
 /build/
 /dist/
 
-# Local design previews and other generated output
-/Design/
+# Other generated output
 /output/
 
 # Xcode build products, test results, and per-user state

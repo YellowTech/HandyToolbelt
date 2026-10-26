@@ -21,7 +21,7 @@ See [release review](Release-review.md) and [window activation validation](Windo
 orientation upright (tools above the pouch). The checked-in PDF is used directly
 by the menu bar and by `xcrun swift Scripts/render-icon.swift`, which writes
 `.build/AppIcon.icns` without building, signing, installing, or stopping the app.
-Add `--preview` to also update `Design/ToolbeltRefinements/approved-preview.png`.
+Add `--preview` to also generate `.build/AppIcon-preview.png`.
 
 SwiftPM copies the PDF into its resource bundle for `swift run`. Packaged apps
 instead carry it at `Contents/Resources/Toolbelt.pdf`; `Scripts/build.swift` copies

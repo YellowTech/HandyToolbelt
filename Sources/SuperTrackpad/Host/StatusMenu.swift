@@ -12,7 +12,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private var subscriptions = Set<AnyCancellable>()
 
     enum Action: Int {
-        case trackpad, chooseWindow, windows, snapping, display, power
+        case trackpad, windows, snapping, display, power
         case preventIdleSleep, keepDisplayAwake, coffee, retryCoffee, settings, restart, quit
     }
 
@@ -22,7 +22,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.delegate = self
         add("Open Gestures…", .trackpad)
-        add("Choose a Window…", .chooseWindow)
         add("Open Switcher…", .windows)
         add("Open Snapping…", .snapping)
         add("Open Overlays…", .display)
@@ -39,9 +38,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         add("Restart HandyToolbelt", .restart)
         add("Quit HandyToolbelt", .quit, key: "q")
         let changes = [host.$isRestarting.map { _ in () }.eraseToAnyPublisher(),
-                       host.trackpad.$configuration.map { _ in () }.eraseToAnyPublisher(),
-                       host.windows.$isRunning.map { _ in () }.eraseToAnyPublisher(),
-                       host.windows.$hasAccessibility.map { _ in () }.eraseToAnyPublisher(),
                        host.coffee.objectWillChange.eraseToAnyPublisher()]
         Publishers.MergeMany(changes).receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.refresh() }.store(in: &subscriptions)
@@ -51,7 +47,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) { refresh() }
 
     func refresh() {
-        items[.chooseWindow]?.isEnabled = host.windows.isRunning && host.windows.hasAccessibility
         items[.preventIdleSleep]?.state = host.coffee.preventIdleSleep ? .on : .off
         items[.keepDisplayAwake]?.state = host.coffee.keepDisplayAwake ? .on : .off
         items[.preventIdleSleep]?.isEnabled = host.coffee.controlsAvailable
@@ -73,7 +68,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         guard let action = Action(rawValue: item.tag) else { return }
         switch action {
         case .trackpad: reveal(.trackpad)
-        case .chooseWindow: host.windows.show()
         case .windows: reveal(.windows)
         case .snapping: reveal(.snapping)
         case .display: reveal(.display)

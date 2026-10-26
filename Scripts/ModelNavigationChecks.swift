@@ -106,12 +106,12 @@ struct ModelNavigationChecks {
         func activate(_ action: StatusMenu.Action) {
             status.menu.performActionForItem(at: status.menu.index(of: item(action)))
         }
-        let expected = ["Open Gestures…", "Choose a Window…", "Open Switcher…", "Open Snapping…", "Open Overlays…", "Open Power…", "", "Prevent idle sleep", "Keep display awake", "Open Coffee…", "", "Settings…", "Restart HandyToolbelt", "Quit HandyToolbelt"]
+        let expected = ["Open Gestures…", "Open Switcher…", "Open Snapping…", "Open Overlays…", "Open Power…", "", "Prevent idle sleep", "Keep display awake", "Open Coffee…", "", "Settings…", "Restart HandyToolbelt", "Quit HandyToolbelt"]
         check(status.menu.items.filter { !$0.isHidden }.map(\.title) == expected, "Native menu preserves visible labels and ordering")
         host.trackpad.configuration.trackpadModuleEnabled = false
         status.refresh()
-        check(!item(.chooseWindow).isEnabled && !item(.preventIdleSleep).isEnabled && !item(.keepDisplayAwake).isEnabled,
-              "Unstarted services keep chooser and Coffee controls disabled")
+        check(!item(.preventIdleSleep).isEnabled && !item(.keepDisplayAwake).isEnabled,
+              "Unstarted Coffee keeps its controls disabled")
         for action in [StatusMenu.Action.trackpad, .windows, .snapping, .display, .coffee, .settings] { activate(action) }
         check(routes == [.trackpad, .windows, .snapping, .display, .coffee, .settings], "Every native menu route retains its destination")
         check(item(.quit).keyEquivalent == "q" && item(.quit).keyEquivalentModifierMask == .command,
