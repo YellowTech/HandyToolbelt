@@ -1,0 +1,38 @@
+# Normalize detected text to LF in the repository and working tree.
+* text=auto eol=lf
+
+# Source, scripts, documentation, and shared project configuration
+*.swift text
+*.sh text
+*.md text
+*.txt text
+*.json text
+*.yml text
+*.yaml text
+*.xml text
+*.entitlements text
+*.pbxproj text
+*.xcconfig text
+*.xcscheme text
+*.xcworkspacedata text
+Package.resolved text
+.gitignore text
+.gitattributes text
+
+# Plists can be XML or binary; retain automatic content detection.
+*.plist text=auto
+
+# Binary assets and archives must not receive text conversions or merges.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.heic binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.dmg binary
+*.car binary

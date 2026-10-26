@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.SuperTrackpad</string>
+	<key>CFBundleName</key>
+	<string>HandyToolbelt</string>
+	<key>CFBundleDisplayName</key>
+	<string>HandyToolbelt</string>
+	<key>CFBundleExecutable</key>
+	<string>SuperTrackpad</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.26.6</string>
+	<key>CFBundleVersion</key>
+	<string>58</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Run the AppleScript actions you configure for your gestures.</string>
+	<key>NSInputMonitoringUsageDescription</key>
+	<string>Recognize trackpad and Magic Mouse clicks for your gesture mappings.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Show temporary previews of individual windows in the window switcher.</string>
+</dict>
+</plist>

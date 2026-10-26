@@ -1,0 +1,46 @@
+# Swift Package Manager and generated app bundles
+.build/
+/build/
+/dist/
+
+# Local design previews and other generated output
+/Design/
+/output/
+
+# Xcode build products, test results, and per-user state
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcarchive/
+*.xcresult/
+*.dSYM/
+*.dSYM.zip
+*.profraw
+*.profdata
+
+# Keep Package.resolved and shared .swiftpm configuration versioned.
+# User-specific Xcode state inside .swiftpm is covered by xcuserdata above.
+
+# Local signing configuration and private signing material
+/.local-signing-identity
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+
+# Local environment overrides; allow checked-in examples
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editor swap and backup files
+*.swp
+*.swo
+*~
