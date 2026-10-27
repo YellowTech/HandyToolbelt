@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// Focused AppKit checks with injected native operations; does not change Dock policy or show windows.
+// Focused AppKit/SwiftUI checks; briefly orders a native test window without activating it.
 import Foundation
 
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -17,6 +17,7 @@ func run(_ arguments: [String]) throws -> Int32 {
 let binary = temporary.appendingPathComponent("presence-checks").path
 let result = try run(["swiftc", "-parse-as-library", "-I", products.path,
     root.appendingPathComponent("Sources/HandyToolbeltApp/Host/MainWindowPresence.swift").path,
+    root.appendingPathComponent("Sources/HandyToolbeltApp/WorkspaceHostingSurface.swift").path,
     root.appendingPathComponent("Scripts/MainWindowPresenceChecks.swift").path,
     products.appendingPathComponent("HandyToolbeltCore.o").path, "-o", binary])
 guard result == 0 else { exit(result) }

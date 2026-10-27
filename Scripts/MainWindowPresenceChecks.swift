@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import HandyToolbeltCore
 
 @main
@@ -51,6 +52,47 @@ struct MainWindowPresenceChecks {
         presence.attach(replacement)
         NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: replacement)
         flush(); precondition(policies.last == .accessory && presence.snapshot(includeFrame: false) == nil)
+        // Use the actual SwiftUI representable in a native hosting hierarchy.
+        // Direct attach() checks cannot catch a retained window reopening without
+        // moving its background reader to another window.
+        var nativePolicies: [NSApplication.ActivationPolicy] = []
+        let nativePresence = MainWindowPresence(policy: { nativePolicies.append($0) }, hidden: { false }, active: { false })
+        let native = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        native.isReleasedWhenClosed = false
+        native.contentView = NSHostingView(rootView: ModuleHostingSurface(selection: .first) { _ in
+            AnyView(WorkspaceHostingSurface(selection: .first) { _ in AnyView(Text("Main content")) })
+        }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MainWindowPresenceReader(presence: nativePresence)))
+        native.orderFront(nil)
+        native.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let nativeID = nativePresence.snapshot(includeFrame: false)!.item.id
+        native.close()
+        precondition(nativePresence.snapshot(includeFrame: false) == nil)
+        native.orderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        precondition(nativePresence.snapshot(includeFrame: false)?.item.id == nativeID,
+                     "A native reopen of the same registered window restores its switcher entry")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        precondition(nativePolicies.last == .regular, "Native reopening restores regular activation policy")
+        // Auxiliary native windows must not replace the registered main identity.
+        panel.orderFront(nil)
+        precondition(nativePresence.snapshot(includeFrame: false)?.item.id == nativeID)
+        panel.orderOut(nil)
+        native.close()
+        precondition(nativePresence.snapshot(includeFrame: false) == nil)
+        // Native visibility during a suppressed login launch must not resurrect it.
+        nativePresence.suppressRestoredLaunchWindow()
+        native.orderFront(nil)
+        precondition(nativePresence.snapshot(includeFrame: false) == nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        precondition(!native.isVisible && nativePolicies.last == .accessory)
+        nativePresence.prepareToOpen()
+        nativePresence.reveal()
+        precondition(nativePresence.snapshot(includeFrame: false)?.item.id == nativeID)
+        native.close()
         print("Main window presence checks passed")
     }
 }
@@ -59,3 +101,8 @@ private final class TestWindow: NSWindow {
     var testMinimized = false
     override var isMiniaturized: Bool { testMinimized }
 }
+
+// Only the cache's finite selection keys are relevant to this native fixture.
+enum FixtureSelection: CaseIterable { case first, second }
+typealias ProductivitySection = FixtureSelection
+typealias TrackpadWorkspace = FixtureSelection

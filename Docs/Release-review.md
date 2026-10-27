@@ -1,5 +1,11 @@
 # HandyToolbelt release review
 
+## Main-window reopening — 0.28.3 (64), 2026-10-27
+
+Fixed a reproduced case where native reopening of the retained main window left its switcher registration marked closed. Reconcile visibility only for the registered window, preserve its identity, and honor login-window suppression. The native regression uses the actual SwiftUI reader and nested cached hosts; it failed before the fix and now passes, including panel exclusion and close/reopen behavior. Existing hidden/minimized and deferred-policy checks also pass, as do 54 activation checks and the release build.
+
+Installed and restarted 0.28.3 with the signing requirement and saved settings preserved; the running executable matches the signed candidate. The app-control tool confirmed the main window reopened. The user's entry had reappeared before installation, so this reproduced lifecycle defect is a plausible cause of that intermittent report, not a confirmed trace of their exact sequence. Backup: `.build/install-backups/2026-10-27T21-01-53Z`.
+
 ## Gesture names — 0.28.2 (63), 2026-10-27
 
 Ordinary mappings support an optional name in the editor, saved list, live recognition label, and gesture toast. Blank names preserve previous labels; Gym teaching remains literal. Names round-trip through settings and the CLI. Visual review also caught stale nested list rows after edits; capturing current values fixes labels and selection without recreating row identities.
