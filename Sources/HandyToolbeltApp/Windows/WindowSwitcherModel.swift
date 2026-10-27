@@ -22,6 +22,7 @@ final class WindowSwitcherModel: ObservableObject {
     private var previewSubscription: AnyCancellable?
     private(set) var gridColumns = 1
     private var previewCatalogItems: [WindowItem] = []
+    private var metadataVisibleIDs = Set<UUID>()
     private var visiblePreviewIDs = Set<UUID>()
     private let catalog: WindowSwitchCatalog
     private let environment: WindowSwitcherEnvironment
@@ -74,6 +75,15 @@ final class WindowSwitcherModel: ObservableObject {
         guard isShowing, settings.showsPreviews else { return }
         let ordered = items.filter { ids.contains($0.id) }.map(\.id)
         previews.setVisible(ordered.sorted { $0 == selectedID && $1 != selectedID })
+        guard previews.hasPermission else { return }
+        let bounded = Set(ordered.prefix(WindowPreviewPolicy.cacheLimit))
+        guard !bounded.isEmpty, metadataVisibleIDs != bounded else { return }
+        metadataVisibleIDs = bounded
+        let request = requestID
+        catalog.previewMetadata(for: Array(bounded)) { [weak self] enriched in
+            guard let self, self.isShowing, self.requestID == request, self.metadataVisibleIDs == bounded else { return }
+            self.previews.updateMetadata(enriched)
+        }
     }
 
     var status: String {
@@ -110,6 +120,9 @@ final class WindowSwitcherModel: ObservableObject {
                     self.refreshAvailability()
                     self.catalog.noteFocus(processID: app.processIdentifier)
                 })
+                for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+                    observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.catalog.applicationsChanged() })
+                }
                 for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
                     observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                         guard let self else { return }
@@ -136,7 +149,7 @@ final class WindowSwitcherModel: ObservableObject {
             }
             catalog.onWindowsChanged = { [weak self] in
                 guard let self, self.isShowing, !self.isLoading else { return }
-                self.refreshOpenChooser()
+                self.refreshOpenChooser(cached: self.catalog.cachedSnapshot())
             }
         }
         refreshAvailability()
@@ -197,7 +210,7 @@ final class WindowSwitcherModel: ObservableObject {
             panel?.show()
         }
         let request = UUID(); requestID = request
-        catalog.refresh(includePreviewMetadata: settings.showsPreviews) { [weak self] snapshot in
+        let opening: (WindowCatalog.Snapshot) -> Void = { [weak self] snapshot in
             guard let self, self.isShowing, self.requestID == request else { return }
             guard self.environment.frontmostPID() == self.originPID else { self.cancel(); return }
             self.previewCatalogItems = snapshot.windows
@@ -211,6 +224,10 @@ final class WindowSwitcherModel: ObservableObject {
             // Handles a quick press/release while the first AX enumeration is still running.
             if self.commitWhenLoaded { self.confirm() }
         }
+        if let cached = catalog.cachedSnapshot() {
+            opening(cached)
+            if isShowing { refreshOpenChooser() }
+        } else { catalog.refresh(includePreviewMetadata: false, completion: opening) }
         return true
     }
 
@@ -234,6 +251,7 @@ final class WindowSwitcherModel: ObservableObject {
     }
     func cancel() {
         catalog.cancelPendingActivations()
+        catalog.cancelPreviewMetadata(); metadataVisibleIDs = []
         previews.end(); previewCatalogItems = []; visiblePreviewIDs = []
         switching = false
         requestID = UUID(); commitWhenLoaded = false; pendingSteps = 0
@@ -283,23 +301,28 @@ final class WindowSwitcherModel: ObservableObject {
         return true
     }
 
-    private func refreshOpenChooser() {
+    private func refreshOpenChooser(cached: WindowCatalog.Snapshot? = nil) {
         guard !refreshingOpenChooser else { return }
         refreshingOpenChooser = true
         let request = requestID
-        catalog.refresh(includePreviewMetadata: settings.showsPreviews) { [weak self] snapshot in
+        let apply: (WindowCatalog.Snapshot) -> Void = { [weak self] snapshot in
             guard let self, self.isShowing, self.requestID == request else { return }
             self.refreshingOpenChooser = false
             let updated = WindowOrdering.candidates(snapshot.windows, settings: self.settings, currentProcessID: self.originPID)
-            if self.settings.showsPreviews, self.previewCatalogItems != snapshot.windows {
+            let previewsChanged = Dictionary(uniqueKeysWithValues: self.previewCatalogItems.map { ($0.id, $0) }) !=
+                Dictionary(uniqueKeysWithValues: snapshot.windows.map { ($0.id, $0) })
+            self.selection.merge(updated.map(\.id))
+            self.items = self.selection.ids.compactMap { id in updated.first { $0.id == id } }
+            self.selectedID = self.selection.selectedID
+            if self.settings.showsPreviews, previewsChanged {
                 self.previewCatalogItems = snapshot.windows
+                self.catalog.cancelPreviewMetadata(); self.metadataVisibleIDs = []
                 self.previews.begin(items: snapshot.windows)
                 self.updateVisiblePreviews(self.visiblePreviewIDs)
             }
-            self.selection.retain(Set(updated.map(\.id)))
-            self.items = self.selection.ids.compactMap { id in updated.first { $0.id == id } }
-            self.selectedID = self.selection.selectedID
-            if self.items.isEmpty { self.message = "These windows have closed. Press Escape and open the switcher again." }
+            self.message = self.items.isEmpty ? "No eligible windows were found. Open a window, then try again." : ""
         }
+        if let cached { apply(cached) }
+        else { catalog.refresh(includePreviewMetadata: false, completion: apply) }
     }
 }

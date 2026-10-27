@@ -98,6 +98,29 @@ final class WindowPreviewService: ObservableObject {
         self.items = items
         lifetime.begin()
     }
+    func updateMetadata(_ enriched: [WindowItem]) {
+        guard lifetime.isActive else { return }
+        let updates = Dictionary(enriched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        items = items.map { item in
+            guard let update = updates[item.id], update.processID == item.processID,
+                  update.captureTitle == item.captureTitle else { return item }
+            var enriched = item
+            enriched.frame = update.frame
+            return enriched
+        }
+        rebuildMatches()
+        pump()
+    }
+    private func rebuildMatches() {
+        matches = [:]
+        var assigned = Set<UInt32>()
+        let available = Array(candidates.values)
+        for item in items {
+            if let id = WindowPreviewPolicy.uniqueMatch(for: item, windows: items, candidates: available), assigned.insert(id).inserted {
+                matches[item.id] = id
+            }
+        }
+    }
     func end() {
         lifetime.end()
         items = []; visibleIDs = []; candidates = [:]; matches = [:]
@@ -125,12 +148,7 @@ final class WindowPreviewService: ObservableObject {
                     self.contentLoaded = true
                     let candidates = (try? result.get()) ?? []
                     self.candidates = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                    var assigned = Set<UInt32>()
-                    for item in self.items {
-                        if let id = WindowPreviewPolicy.uniqueMatch(for: item, windows: self.items, candidates: candidates), assigned.insert(id).inserted {
-                            self.matches[item.id] = id
-                        }
-                    }
+                    self.rebuildMatches()
                     self.pump()
                 }
             }

@@ -1,5 +1,29 @@
 # HandyToolbelt release review
 
+## Folder interaction and change review — 0.29.2 (67), 2026-10-27
+
+The stack disclosure now covers the arrow and folder with a 46 × 44 pt target and an accessible expanded/collapsed value. Review introduced typed sidebar identities, kept Add Gesture independent of folder selection, preserved selection when deleting unrelated mappings, and applied the existing name limit to folder names.
+
+The window catalogue retains known live windows when an app temporarily fails Accessibility enumeration. Successful empty enumerations and explicit destruction still remove windows. Order-only refreshes preserve in-flight previews; delayed metadata copies matching geometry without overwriting newer window state.
+
+Passed 140 unit/contract tests, 58 switcher-flow checks, 412 model/navigation checks and 413 legacy-model checks, release compilation, and strict signature verification. Installed-app checks confirmed expansion through the folder icon, collapse through its surrounding padding, child-to-folder selection fallback, and an unselected Add Gesture row. The running binaries match the candidate, signing requirements and saved settings are preserved, and 0.29.2 was restarted successfully. Rollback: `.build/install-backups/2026-10-27T22-01-31Z`.
+
+## Switcher opening latency — 0.29.1 (66), 2026-10-27
+
+The preview change still left every opening waiting for a full serial Accessibility scan. The chooser now uses a synchronized known-window snapshot immediately, then refreshes and merges results without changing the selected surviving window. Window/app events maintain the snapshot; focus events update per-process focus and recent order without full scans. Activation and preview metadata use independent queues and copied native references, so a background scan cannot hold confirmation. The first scan after enabling or resuming remains asynchronous.
+
+Review addressed stale scan delivery after stop/start, changes arriving during scans, newer focus being overwritten, local-window reopening/activation, and minimized state changing between scans. Passed 25 focused Core tests, 51 switcher flow checks (including a blocked native scan queue), 54 activation checks, native main-window presence checks, and debug/release builds. Installed and relaunched with unchanged signing requirements and settings; Switcher permissions remain fulfilled. Physical opening latency still needs user confirmation. Rollback: `.build/install-backups/2026-10-27T21-49-35Z`.
+
+## Stack folders and asynchronous previews — 0.29.0 (65), 2026-10-27
+
+Stacks now expand into individually selectable child gestures. Folder settings retain activation and start/release actions; child editors support optional names and preserve ordered action sequences. Selection remains valid after collapse, deletion, device changes and configuration replacement. Existing configurations decode without child names.
+
+The switcher publishes its window list before fetching preview geometry. Visible-window enrichment runs on a separate cancellable AX queue, while screenshots retain bounded concurrency and caching. Missing geometry for same-title peers prevents ambiguous image assignment. Confirming, dismissing or reopening rejects stale metadata and images.
+
+Validation passed: 7 stack tests, 14 contract tests, 407 model/navigation checks in both invocations, preview matching coverage, 43 switcher flow checks, 58 stack runtime checks, release compilation and strict signature verification. Installed-app visual checks covered folder selection, expansion, child editors, collapse with a selected child, and the matching gesture demonstration. Physical switcher responsiveness remains for user testing; synthetic OS-boundary tests do not measure real-device latency.
+
+Installed and restarted with the existing signing requirement and saved choices preserved; both running-bundle executables match the signed candidate. Rollback backup: `.build/install-backups/2026-10-27T21-33-03Z`.
+
 ## Main-window reopening — 0.28.3 (64), 2026-10-27
 
 Fixed a reproduced case where native reopening of the retained main window left its switcher registration marked closed. Reconcile visibility only for the registered window, preserve its identity, and honor login-window suppression. The native regression uses the actual SwiftUI reader and nested cached hosts; it failed before the fix and now passes, including panel exclusion and close/reopen behavior. Existing hidden/minimized and deferred-policy checks also pass, as do 54 activation checks and the release build.

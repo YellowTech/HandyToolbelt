@@ -183,6 +183,10 @@ private func sampleWindows() -> [WindowItem] {
     #expect(WindowPreviewPolicy.uniqueMatch(for: item, windows: [item], candidates: [candidate]) == 7)
     var duplicate = item; duplicate.id = UUID()
     #expect(WindowPreviewPolicy.uniqueMatch(for: item, windows: [item, duplicate], candidates: [candidate]) == nil)
+    duplicate.frame = nil
+    #expect(WindowPreviewPolicy.uniqueMatch(for: item, windows: [item, duplicate], candidates: [candidate]) == nil)
+    duplicate.frame = frame.offsetBy(dx: 40, dy: 0)
+    #expect(WindowPreviewPolicy.uniqueMatch(for: item, windows: [item, duplicate], candidates: [candidate]) == 7)
     var second = candidate; second.id = 8
     #expect(WindowPreviewPolicy.uniqueMatch(for: item, windows: [item], candidates: [candidate, second]) == nil)
     var changed = candidate; changed.processID = 43
@@ -328,4 +332,38 @@ private func sampleWindows() -> [WindowItem] {
     let bounded = WindowChooserGeometry.size(available: CGSize(width: 640, height: 480), layout: .grid, previews: true, gridScale: 1.5)
     #expect(bounded.width <= 608 && bounded.height <= 448)
     #expect(WindowChooserGeometry.size(available: available, layout: .list, previews: true, gridScale: 0.75) == WindowChooserGeometry.size(available: available, layout: .list, previews: true, gridScale: 1.5))
+}
+
+@Test func refreshedWindowsRetainNavigationAndAppendDiscoveries() {
+    let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+    var selection = WindowSelection()
+    selection.begin(ids: [a, b, c], focusedID: a)
+    selection.merge([c, a, b, d])
+    #expect(selection.ids == [a, b, c, d])
+    #expect(selection.selectedID == b)
+    selection.merge([c, a, d])
+    #expect(selection.ids == [a, c, d])
+    #expect(selection.selectedID == a)
+    selection.merge([])
+    #expect(selection.selectedID == nil)
+    selection.merge([d])
+    #expect(selection.selectedID == d)
+}
+
+@Test func catalogRefreshCoalescesEventsAndRejectsInvalidatedCompletions() {
+    var schedule = WindowRefreshSchedule()
+    let old = schedule.begin()!
+    #expect(schedule.begin() == nil)
+    schedule.noteChange(); schedule.noteChange(); schedule.noteChange()
+    #expect(schedule.finish(old) == true)
+    let next = schedule.begin()!
+    #expect(schedule.finish(old) == nil)
+    #expect(schedule.token == next)
+    #expect(schedule.finish(next) == false)
+    let sleeping = schedule.begin()!
+    schedule.noteChange(); schedule.invalidate()
+    let awake = schedule.begin()!
+    #expect(schedule.finish(sleeping) == nil)
+    #expect(schedule.token == awake)
+    #expect(schedule.finish(awake) == false)
 }

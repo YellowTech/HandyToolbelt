@@ -141,6 +141,13 @@ public struct WindowSelection: Sendable {
         selectedID = ids[wrapped(index + direction, count: ids.count)]
     }
     public mutating func select(_ id: UUID) { if ids.contains(id) { selectedID = id } }
+    /// Keep navigation order and selection while incorporating newly discovered windows.
+    public mutating func merge(_ available: [UUID]) {
+        retain(Set(available))
+        let existing = Set(ids)
+        ids.append(contentsOf: available.filter { !existing.contains($0) })
+        if selectedID == nil { selectedID = ids.first }
+    }
     public mutating func retain(_ available: Set<UUID>) {
         ids = ids.filter { available.contains($0) }
         if !ids.contains(where: { $0 == selectedID }) { selectedID = ids.first }
@@ -184,6 +191,9 @@ public enum WindowPreviewPolicy {
     public static func uniqueMatch(for item: WindowItem, windows: [WindowItem], candidates: [WindowPreviewCandidate]) -> UInt32? {
         guard !item.isHidden, !item.isMinimized, !item.captureTitle.isEmpty, let frame = item.frame,
               imageSize(for: frame) != nil, frame.origin.x.isFinite, frame.origin.y.isFinite else { return nil }
+        // A peer whose geometry has not arrived may be the same native window.
+        // Do not guess while asynchronous enrichment is incomplete or unavailable.
+        guard !windows.contains(where: { $0.id != item.id && $0.processID == item.processID && $0.captureTitle == item.captureTitle && $0.frame == nil }) else { return nil }
         // Both sides must be unique; a duplicated AX window must never share a screenshot.
         let peers = windows.filter { $0.processID == item.processID && $0.captureTitle == item.captureTitle && $0.frame == frame }
         guard peers.count == 1, peers.first?.id == item.id else { return nil }
@@ -211,4 +221,22 @@ public enum WindowChooserGeometry {
     public static func columns(width: Double, previews: Bool, previewScale: Double = 1) -> Int {
         max(1, Int((max(1, width) - 24) / (previews ? 210 * WindowSwitcherSettings.validatedPreviewScale(previewScale) : 170)))
     }
+}
+
+/// Main-thread scan gate. Events during a scan request exactly one fresh follow-up;
+/// invalidation prevents old scan completions from consuming a new run's callbacks.
+public struct WindowRefreshSchedule {
+    public private(set) var token: UUID?
+    public private(set) var needsFollowUp = false
+    public init() {}
+    public mutating func begin() -> UUID? {
+        guard token == nil else { return nil }
+        let next = UUID(); token = next; return next
+    }
+    public mutating func noteChange() { if token != nil { needsFollowUp = true } }
+    public mutating func finish(_ completed: UUID) -> Bool? {
+        guard token == completed else { return nil }
+        let again = needsFollowUp; token = nil; needsFollowUp = false; return again
+    }
+    public mutating func invalidate() { token = nil; needsFollowUp = false }
 }

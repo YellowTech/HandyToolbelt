@@ -9,10 +9,22 @@ private final class NoCapture: WindowPreviewCapturing {
     func loadWindows(completion: @escaping (Result<[WindowPreviewCandidate], Error>) -> Void) { fatalError("Unexpected capture") }
     func capture(id: UInt32, size: CGSize, completion: @escaping (Result<CGImage, Error>) -> Void) { fatalError("Unexpected capture") }
 }
+private final class DelayedCapture: WindowPreviewCapturing {
+    var loads: [(Result<[WindowPreviewCandidate], Error>) -> Void] = []
+    var captures: [(Result<CGImage, Error>) -> Void] = []
+    func hasPermission() -> Bool { true }
+    func requestPermission() { fatalError("Unexpected permission request") }
+    func loadWindows(completion: @escaping (Result<[WindowPreviewCandidate], Error>) -> Void) { loads.append(completion) }
+    func capture(id: UInt32, size: CGSize, completion: @escaping (Result<CGImage, Error>) -> Void) { captures.append(completion) }
+}
 private final class Catalogue: WindowSwitchCatalog {
     var onWindowsChanged: (() -> Void)?
     var activationDiagnostics: [String] = []
+    var warm = false
+    func cachedSnapshot() -> WindowCatalog.Snapshot? { warm ? .init(windows: windows, focusedID: focused, unavailableApps: 0) : nil }
     var pending: [(WindowCatalog.Snapshot) -> Void] = []
+    var metadata: [([WindowItem]) -> Void] = []
+    var metadataFlags: [Bool] = []
     var scheduled: [() -> Void] = []
     var generation = 0
     var frontmost: Int32? = 10
@@ -26,7 +38,9 @@ private final class Catalogue: WindowSwitchCatalog {
     func stop() { cancelPendingActivations() }
     func noteFocus(processID: pid_t) {}
     func cancelPendingActivations() { generation += 1 }
-    func refresh(includePreviewMetadata: Bool, completion: @escaping (WindowCatalog.Snapshot) -> Void) { pending.append(completion) }
+    func refresh(includePreviewMetadata: Bool, completion: @escaping (WindowCatalog.Snapshot) -> Void) { metadataFlags.append(includePreviewMetadata); pending.append(completion) }
+    func cancelPreviewMetadata() {}
+    func previewMetadata(for ids: [UUID], completion: @escaping ([WindowItem]) -> Void) { metadata.append(completion) }
     func deliver(_ index: Int = 0) { pending.remove(at: index)(.init(windows: windows, focusedID: focused, unavailableApps: 0)) }
     func drain() { var limit = 0; while !scheduled.isEmpty { limit += 1; precondition(limit < 100); scheduled.removeFirst()() } }
     func activate(_ id: UUID, expectedProcessID: pid_t?, completion: @escaping (Result<String, Error>) -> Void) {
@@ -178,6 +192,140 @@ private final class SnapListener: WindowSnappingMonitoring {
         workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
         check(snapping.monitorAvailable && snapListener.listening, "Wake resumes snapping after chooser sleep cleanup")
         check(visibility.contains(true) && visibility.last == false, "Production host routing finishes resumed")
+        // Preview geometry and native capture are independently delayed OS boundaries.
+        let previewCatalog = Catalogue(), delayed = DelayedCapture()
+        let previewService = WindowPreviewService(capture: delayed)
+        let previewModel = WindowSwitcherModel(catalog: previewCatalog,
+            environment: .init(accessibility: { true }, sessionActive: { true }, frontmostPID: { previewCatalog.frontmost }, startKeyboard: { _ in true }, nativeServices: false),
+            previews: previewService, previewSetup: WindowPreviewSetupModel(capture: delayed, observeSystem: false))
+        previewCatalog.windows = [first, second]; previewCatalog.focused = first.id
+        var previewSettings = WindowSwitcherSettings(); previewSettings.isEnabled = true; previewSettings.showsPreviews = true
+        previewModel.configure(previewSettings); previewCatalog.deliver()
+        previewCatalog.focused = first.id
+        _ = previewModel.show(); previewCatalog.deliver()
+        previewModel.updateVisiblePreviews([second.id])
+        check(!previewModel.isLoading && previewModel.selectedID == second.id && !previewCatalog.metadata.isEmpty,
+              "Rows and selection are ready before delayed preview geometry")
+        check(previewCatalog.metadataFlags.allSatisfy { !$0 }, "Preview-enabled chooser requests fast base catalogues")
+        previewModel.confirm(); previewCatalog.drain()
+        check(previewCatalog.requested == [second.id] && !previewModel.isShowing, "Commit does not wait for metadata or images")
+        let oldMetadata = previewCatalog.metadata.removeFirst()
+        previewCatalog.focused = first.id
+        _ = previewModel.show(); previewCatalog.deliver()
+        let currentSelection = previewModel.selectedID
+        oldMetadata([first, second])
+        check(previewModel.isShowing && previewModel.selectedID == currentSelection && previewService.images.isEmpty,
+              "Late metadata cannot alter reopened chooser or selection")
+        previewModel.updateVisiblePreviews([second.id])
+        previewModel.cancel()
+        previewCatalog.metadata.removeFirst()([first, second])
+        check(!previewModel.isShowing && previewService.images.isEmpty, "Late geometry cannot resurrect dismissed chooser")
+        // Content requests are real in-flight work; releasing one after dismissal must not restart capture.
+        delayed.loads.removeFirst()(.success([]))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        check(delayed.captures.isEmpty && previewService.images.isEmpty, "Late native content cannot create images after dismiss")
+        previewCatalog.focused = first.id
+        _ = previewModel.show(); previewCatalog.deliver()
+        previewModel.updateVisiblePreviews([second.id])
+        let frame = CGRect(x: 10, y: 20, width: 600, height: 400)
+        var enrichedSecond = second; enrichedSecond.frame = frame
+        previewCatalog.metadata.removeFirst()([enrichedSecond])
+        delayed.loads.removeFirst()(.success([.init(id: 42, processID: second.processID, title: second.title, frame: frame)]))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        check(delayed.captures.count == 1 && previewModel.selectedID == second.id, "Delayed geometry starts capture without changing keyboard selection")
+        let metadataCount = previewCatalog.metadata.count, loadCount = delayed.loads.count
+        previewCatalog.windows = [second, first]
+        previewCatalog.onWindowsChanged?(); previewCatalog.deliver()
+        check(delayed.captures.count == 1 && delayed.loads.count == loadCount && previewCatalog.metadata.count == metadataCount,
+              "Order-only refresh preserves delayed native capture and metadata generation")
+        let retainedImage = CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
+        delayed.captures.removeFirst()(.success(retainedImage))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        check(previewService.images[second.id] != nil && previewModel.selectedID == second.id, "Order-only refresh accepts pending image without selection jump")
+        previewCatalog.windows = [first, enrichedSecond]
+        previewCatalog.onWindowsChanged?(); previewCatalog.deliver()
+        check(previewService.images.isEmpty, "Real window metadata change invalidates old preview generation")
+        previewModel.updateVisiblePreviews([second.id])
+        if !delayed.loads.isEmpty {
+            delayed.loads.removeFirst()(.success([.init(id: 42, processID: second.processID, title: second.title, frame: frame)]))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        previewModel.confirm(); previewCatalog.drain()
+        previewCatalog.focused = first.id
+        _ = previewModel.show(); previewCatalog.deliver()
+        let image = CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
+        delayed.captures.removeFirst()(.success(image))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        check(previewModel.isShowing && previewModel.selectedID == second.id && previewService.images.isEmpty,
+              "Late captured image from confirmed chooser cannot enter reopened chooser")
+        previewModel.stop()
+        let staleCapture = DelayedCapture()
+        // Keep each delayed backend attached to the service exercised below.
+        let metadataService = WindowPreviewService(capture: staleCapture)
+        var renamed = second; renamed.captureTitle = "Renamed"; renamed.title = "Renamed"
+        metadataService.begin(items: [renamed]); metadataService.setVisible([renamed.id])
+        metadataService.updateMetadata([enrichedSecond])
+        staleCapture.loads.removeFirst()(.success([.init(id: 42, processID: second.processID, title: second.captureTitle, frame: frame)]))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        check(staleCapture.captures.isEmpty, "Delayed metadata with stale title cannot overwrite live title or start capture")
+        metadataService.end()
+        var hidden = second; hidden.isHidden = true
+        metadataService.begin(items: [hidden]); metadataService.setVisible([hidden.id])
+        metadataService.updateMetadata([enrichedSecond])
+        staleCapture.loads.removeFirst()(.success([.init(id: 42, processID: second.processID, title: second.captureTitle, frame: frame)]))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        check(staleCapture.captures.isEmpty, "Delayed metadata cannot unhide a live hidden window and start capture")
+        metadataService.end()
+        let knownHandles = [(pid: pid_t(10), handle: "known"), (pid: pid_t(20), handle: "terminated"), (pid: pid_t(10), handle: "destroyed")]
+        let retained = WindowCatalog.retainedDuringEnumerationFailure(knownHandles, unavailablePIDs: [10, 20, 30], livePIDs: [10, 30],
+            processID: { $0.pid }, destroyed: { $0.handle == "destroyed" })
+        check(retained.map(\.handle) == ["known"], "Production failure policy retains known live handles, drops destroyed and terminated handles, and invents no cold handles")
+        check(WindowCatalog.retainedDuringEnumerationFailure(knownHandles, unavailablePIDs: [], livePIDs: [10], processID: { $0.pid }, destroyed: { _ in false }).isEmpty,
+              "Successful empty enumeration clears previously retained handles")
+        // Exercise the real catalogue queues without AX reads or user-visible effects.
+        let heldScan = DispatchQueue(label: "checks.held-scan"), releaseScan = DispatchSemaphore(value: 0)
+        heldScan.async { releaseScan.wait() }
+        let nativeCatalog = WindowCatalog(scanQueue: heldScan)
+        nativeCatalog.start()
+        nativeCatalog.refresh { _ in }
+        var independentActivation = false
+        nativeCatalog.activate(UUID(), expectedProcessID: nil) { result in
+            if case .failure = result { independentActivation = true }
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while !independentActivation && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
+        check(independentActivation, "Real catalogue activation lookup runs while scan queue is blocked")
+        nativeCatalog.stop(); releaseScan.signal()
+        catalog.pending = []; catalog.frontmost = 10; catalog.focused = first.id
+        catalog.windows = [first, second, third]; catalog.warm = true
+        let warmModel = WindowSwitcherModel(catalog: catalog,
+            environment: .init(accessibility: { true }, sessionActive: { true }, frontmostPID: { catalog.frontmost }, startKeyboard: { _ in true }, nativeServices: false),
+            previews: WindowPreviewService(capture: capture), previewSetup: WindowPreviewSetupModel(capture: capture, observeSystem: false))
+        warmModel.configure(settings); catalog.deliver()
+        _ = warmModel.show(releaseToConfirm: true)
+        check(!warmModel.isLoading && warmModel.selectedID == second.id && catalog.pending.count == 1,
+              "Warm chooser selects immediately while background scan remains pending")
+        warmModel.confirm(); catalog.drain()
+        check(catalog.requested.last == second.id && !warmModel.isShowing,
+              "Warm quick release activates before delayed scan completion")
+        catalog.deliver() // stale background result cannot reopen chooser
+        check(!warmModel.isShowing, "Delayed refresh cannot resurrect a confirmed warm chooser")
+        catalog.focused = first.id; catalog.frontmost = 10
+        _ = warmModel.show(); warmModel.step(1)
+        check(warmModel.selectedID == third.id, "Warm navigation advances before refresh")
+        let fourth = WindowItem(processID: 20, appName: "Other", bundleIdentifier: "test.other", title: "Fourth")
+        catalog.windows = [fourth, third, first]; catalog.deliver()
+        check(warmModel.items.map(\.id) == [first.id, third.id, fourth.id] && warmModel.selectedID == third.id,
+              "Late scan removes closed windows and appends discoveries without moving selection")
+        warmModel.cancel(); catalog.focused = third.id
+        _ = warmModel.show()
+        check(warmModel.selectedID == first.id, "Warm reopening uses changed current focus")
+        warmModel.suspendSession(sleeping: true)
+        catalog.deliver()
+        check(!warmModel.isShowing && !warmModel.isLoading, "Lifecycle cancellation rejects delayed warm results")
+        warmModel.stop()
         print("Passed \(count) window switcher flow checks")
     }
 }
