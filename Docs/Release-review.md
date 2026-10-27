@@ -4,7 +4,7 @@
 
 Previous/next browser tab now use ordinary Key press actions (Control–Shift–Tab / Control–Tab). The duplicate System choices are removed. Legacy settings and CLI inputs migrate across mappings, stacks, and automations; exports use the canonical shortcut form.
 
-Unit and contract tests, 181 CLI integration checks, 400/401 model checks, 58 stack checks, 53 transfer checks, and release compilation passed. The signed candidate is staged at `.build/browser-shortcut-release/HandyToolbelt.app`; the running 0.28.0 app was not replaced.
+Unit and contract tests, 181 CLI integration checks, 400/401 model checks, 58 stack checks, 53 transfer checks, and release compilation passed. The signed candidate at `.build/browser-shortcut-release/HandyToolbelt.app` was installed and relaunched from `dist/HandyToolbelt.app`. The running executable matches the candidate, the designated signing requirement is unchanged, and saved configuration is preserved. The previous app and settings are backed up under `.build/install-backups/2026-10-27T20-20-08Z`.
 
 ## Tester feedback — 0.28.0 (61), 2026-10-27
 
