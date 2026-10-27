@@ -16,6 +16,7 @@ if CommandLine.arguments.dropFirst().elementsEqual(["--generate-docs"]) {
     try run(["Scripts/check-control-integration.swift", "--generate-docs"])
 } else {
     guard CommandLine.arguments.count == 1 else { fatalError("Usage: Scripts/verify.swift [--generate-docs]") }
+    try run(["Scripts/check-build-signing.swift"])
     try run(["test"])
     try run(["Scripts/check-model-navigation.swift"])
     try run(["Scripts/check-main-window-presence.swift"])

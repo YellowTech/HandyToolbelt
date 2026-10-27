@@ -4,7 +4,11 @@ The app is pure Swift using Apple system frameworks and local storage. Runtime a
 
 `swift Scripts/build.swift` runs verification, builds release executables for the current architecture, packages `dist/HandyToolbelt.app`, and signs and verifies the CLI and app. Quit any repository copy before rebuilding. This is a development build, not a notarized distribution release.
 
-Signing selects the sole available Apple Development/Mac Developer identity and pins it in the ignored `.local-signing-identity` file. Select another identity explicitly with `SUPERTRACKPAD_SIGN_IDENTITY='YOUR_SIGNING_IDENTITY' swift Scripts/build.swift`. Use `SUPERTRACKPAD_SIGN_IDENTITY='-'` only for disposable ad-hoc builds; rebuilding them can invalidate macOS permissions. Test permissions with the packaged app, since `swift run` has a different executable identity.
+Signing reuses the ignored `.local-signing-identity` pin, or selects and pins the sole available Apple Development/Mac Developer identity after a successful build. A fresh checkout with no development certificate and no existing repository app automatically uses ad-hoc signing and pins `-`; macOS privacy permissions may need to be granted again after rebuilding. Adding a certificate later does not change that pin. Multiple certificates require an explicit choice. Missing or invalid pinned identities fail without falling back, and an existing repository app prevents automatic ad-hoc selection.
+
+Select an identity explicitly with `SUPERTRACKPAD_SIGN_IDENTITY='YOUR_SIGNING_IDENTITY' swift Scripts/build.swift`. An explicit certificate becomes the pin after success; `SUPERTRACKPAD_SIGN_IDENTITY='-'` preserves any existing pin for disposable ad-hoc builds; when no pin exists, a successful build pins `-` so plain rebuilds keep working. Test permissions with the packaged app, since `swift run` has a different executable identity.
+
+Run `swift Scripts/check-build-signing.swift` for isolated signing-policy and error-output checks. These use synthetic identity listings and temporary files without querying Keychain, packaging, or changing the local pin.
 
 Gesture input uses Apple's private `MultitouchSupport` framework. Its undocumented interface may change across macOS versions; hardware and OS compatibility require real-device testing. If native click detection is unavailable, check Input Monitoring and relaunch.
 
