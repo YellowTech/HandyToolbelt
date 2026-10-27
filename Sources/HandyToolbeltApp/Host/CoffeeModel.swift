@@ -33,11 +33,12 @@ final class CoffeeModel: ObservableObject {
     func configure(enabled: Bool, running: Bool) {
         let changed = self.enabled != enabled || self.running != running
         self.enabled = enabled; self.running = running
+        if !enabled { preventIdleSleep = false; keepDisplayAwake = false }
         if changed { reconcile() }
     }
     func set(preventIdleSleep: Bool? = nil, keepDisplayAwake: Bool? = nil) {
-        if let preventIdleSleep { self.preventIdleSleep = preventIdleSleep }
-        if let keepDisplayAwake { self.keepDisplayAwake = keepDisplayAwake }
+        if let preventIdleSleep { self.preventIdleSleep = enabled && preventIdleSleep }
+        if let keepDisplayAwake { self.keepDisplayAwake = enabled && keepDisplayAwake }
         reconcile()
     }
     func retry() { reconcile() }

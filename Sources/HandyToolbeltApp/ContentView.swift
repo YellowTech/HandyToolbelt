@@ -91,40 +91,48 @@ struct ContentView: View {
                 if model.configuration.stacks.contains(where: { $0.id == id }) { model.selectedStackID = id; model.selectedID = nil }
                 else { model.selectedID = id; model.selectedStackID = nil }
             })) {
-                ForEach(model.visibleBindings) { binding in
-                    HStack(alignment: .center, spacing: 12) {
-                        GestureGlyph(gesture: binding.gesture).frame(width: 40, height: 28)
-                            .foregroundStyle(binding.isEnabled ? Theme.text : .secondary)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(binding.gesture.title).fontWeight(.medium)
-                            Text(binding.action.title).font(.caption).foregroundStyle(Theme.secondary)
-                            Text(model.configuration.scopeTitle(for: binding)).font(.caption2).foregroundStyle(Theme.secondary)
-                            if binding.gesture.corner != .none {
-                                Text(binding.gesture.corner.title).font(.caption2).foregroundStyle(Theme.secondary)
+                ForEach(model.mappingScopeIDs, id: \.self) { scopeID in
+                    ForEach(model.visibleBindings.filter { $0.applicationGroupID == scopeID }) { binding in
+                        HStack(alignment: .center, spacing: 12) {
+                            GestureGlyph(gesture: binding.gesture).frame(width: 40, height: 28)
+                                .foregroundStyle(binding.isEnabled ? Theme.text : .secondary)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(binding.gesture.title).fontWeight(.medium)
+                                Text(binding.action.title).font(.caption).foregroundStyle(Theme.secondary)
+                                HStack(spacing: 5) {
+                                    if let id = binding.applicationGroupID, let group = model.configuration.applicationGroups.first(where: { $0.id == id }) { ApplicationGroupIcons(group: group) }
+                                    Text(model.configuration.scopeTitle(for: binding)).font(.caption2).foregroundStyle(Theme.secondary)
+                                }
+                                if binding.gesture.corner != .none {
+                                    Text(binding.gesture.corner.title).font(.caption2).foregroundStyle(Theme.secondary)
+                                }
                             }
-                        }
-                        Spacer(minLength: 0)
-                        if model.configuration.hasConflict(binding) {
-                            Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).help("Conflicting mappings. Actions are blocked where their app scopes overlap.")
-                        } else if !binding.isEnabled {
-                            Image(systemName: "pause.circle").foregroundStyle(Theme.secondary).help("Mapping disabled")
-                        }
-                    }.padding(.vertical, 6).tag(binding.id)
-                    .graphiteSelection(model.selectedID == binding.id)
-                    .contextMenu { Button("Delete Gesture", role: .destructive) { model.removeBinding(binding.id) } }
-                }
-                ForEach(model.visibleStacks) { stack in
-                    HStack(spacing: 12) {
-                        Image(systemName: "square.stack").frame(width: 22)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(stack.name).fontWeight(.medium)
-                            Text("\(stack.corner.title) · \(model.configuration.scopeTitle(for: stack))").font(.caption).foregroundStyle(Theme.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        if stack.isEnabled && (!model.configuration.stackValidationMessages(for: stack).isEmpty || !model.configuration.conflictMessages(for: stack).isEmpty) { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange) }
-                        else if !stack.isEnabled { Image(systemName: "pause.circle").foregroundStyle(Theme.secondary) }
-                    }.padding(.vertical, 6).tag(stack.id).graphiteSelection(model.selectedStackID == stack.id)
-                    .contextMenu { Button("Delete Stack", role: .destructive) { model.removeStack(stack.id) } }
+                            Spacer(minLength: 0)
+                            if model.configuration.hasConflict(binding) {
+                                Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).help("Conflicting mappings. Actions are blocked where their app scopes overlap.")
+                            } else if !binding.isEnabled {
+                                Image(systemName: "pause.circle").foregroundStyle(Theme.secondary).help("Mapping disabled")
+                            }
+                        }.padding(.vertical, 6).tag(binding.id)
+                        .graphiteSelection(model.selectedID == binding.id)
+                        .contextMenu { Button("Delete Gesture", role: .destructive) { model.removeBinding(binding.id) } }
+                    }
+                    ForEach(model.visibleStacks.filter { $0.applicationGroupID == scopeID }) { stack in
+                        HStack(spacing: 12) {
+                            Image(systemName: "square.stack").frame(width: 22)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(stack.name).fontWeight(.medium)
+                                HStack(spacing: 5) {
+                                    if let id = stack.applicationGroupID, let group = model.configuration.applicationGroups.first(where: { $0.id == id }) { ApplicationGroupIcons(group: group) }
+                                    Text("\(stack.corner.title) · \(model.configuration.scopeTitle(for: stack))").font(.caption).foregroundStyle(Theme.secondary)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            if stack.isEnabled && (!model.configuration.stackValidationMessages(for: stack).isEmpty || !model.configuration.conflictMessages(for: stack).isEmpty) { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange) }
+                            else if !stack.isEnabled { Image(systemName: "pause.circle").foregroundStyle(Theme.secondary) }
+                        }.padding(.vertical, 6).tag(stack.id).graphiteSelection(model.selectedStackID == stack.id)
+                        .contextMenu { Button("Delete Stack", role: .destructive) { model.removeStack(stack.id) } }
+                    }
                 }
             }.listStyle(.plain).scrollContentBackground(.hidden).background(GraphiteListSelection())
             HStack {
@@ -162,6 +170,8 @@ struct BindingEditor: View {
                         if enabled && !errors.isEmpty { activationError = errors.first }
                         else { activationError = nil; binding.isEnabled = enabled }
                     })).toggleStyle(.switch).controlSize(.small).fixedSize()
+                    Button(role: .destructive) { confirmingDeletion = true } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless).help("Delete gesture").accessibilityLabel("Delete gesture")
                     Button("Practice in Gym") { model.practice(binding.gesture) }.controlSize(.small)
                 }
                 VStack(alignment: .leading, spacing: 8) {
@@ -198,7 +208,7 @@ struct BindingEditor: View {
                         Spacer(minLength: 0)
                     }
                     HStack {
-                        Text(binding.gesture.kind.isAnchored && binding.gesture.kind != .tipTapMiddle ? "Resting fingers" : "Fingers")
+                        Text(binding.gesture.kind.isAnchored && !([GestureKind.tipTapMiddle, .doubleTipTapMiddle].contains(binding.gesture.kind)) ? "Resting fingers" : "Fingers")
                             .frame(width: 125, alignment: .leading)
                         GestureFingerPicker(gesture: $binding.gesture).labelsHidden().frame(width: 230)
                         Spacer(minLength: 0)
@@ -257,12 +267,7 @@ struct BindingEditor: View {
                 if binding.gesture.kind.isSwipe {
                     HelpHint("Turn off the matching swipe in System Settings → Trackpad. macOS gestures are not blocked by this app.")
                 }
-                HStack {
 
-                    Spacer()
-                    Button(role: .destructive) { confirmingDeletion = true } label: { Image(systemName: "trash") }
-                        .buttonStyle(.borderless).help("Delete gesture").accessibilityLabel("Delete gesture")
-                }
             }.padding(24)
         }
         .confirmationDialog("Delete this gesture mapping?", isPresented: $confirmingDeletion) {

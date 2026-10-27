@@ -6,7 +6,7 @@ private enum TeachingPhase {
     case contact, action, lift
 
     init(progress: Double, kind: GestureKind) {
-        if kind == .doubleTap {
+        if kind == .doubleTap || kind.isDoubleTipTap {
             self = progress < 0.22 ? .action : (progress < 0.42 ? .lift : (progress < 0.72 ? .action : .lift))
             return
         }
@@ -70,8 +70,8 @@ struct GestureGlyph: View {
     private var radius: CGFloat { compact ? 2.8 : 8 }
     private var activeIndex: Int {
         switch gesture.kind {
-        case .tipTapLeft: return 0
-        case .tipTapMiddle: return 1
+        case .tipTapLeft, .doubleTipTapLeft: return 0
+        case .tipTapMiddle, .doubleTipTapMiddle: return 1
         default: return gesture.fingers - 1
         }
     }
@@ -164,8 +164,8 @@ extension GestureSpec {
         if kind.isAnchored {
             let resting = fingers - 1
             let role = resting == 1 ? "finger" : "fingers"
-            let motion = kind.isTipTap ? "Briefly tap" : "Swipe \(kind.teachingDirectionName)"
-            action = "Rest \(resting) \(role). \(motion) with one finger \(teachingPlacement), then lift it. Keep the resting fingers still."
+            let motion = kind.isDoubleTipTap ? "Tap twice" : (kind.isTipTap ? "Briefly tap" : "Swipe \(kind.teachingDirectionName)")
+            action = "Rest \(resting) \(role). \(motion) with one finger \(teachingPlacement), then lift it. Keep the resting fingers still.\(kind.isDoubleTipTap ? " Lift only the active finger between taps. Matching single tip-taps wait briefly for the second tap." : "")"
         } else if kind == .longTouch {
             action = "Touch \(fingers == 1 ? "one finger" : "\(fingers) fingers together") and hold still without pressing. Lift before trying again."
         } else if kind == .doubleTap {
@@ -185,9 +185,9 @@ extension GestureSpec {
 
     private var teachingPlacement: String {
         switch kind {
-        case .tipTapMiddle: return "between them"
-        case .tipTapLeft: return "to their left"
-        case .tipTapRight: return "to their right"
+        case .tipTapMiddle, .doubleTipTapMiddle: return "between them"
+        case .tipTapLeft, .doubleTipTapLeft: return "to their left"
+        case .tipTapRight, .doubleTipTapRight: return "to their right"
         default: return "beside them"
         }
     }
@@ -230,7 +230,7 @@ struct GestureHowTo: View {
     private var phaseTitle: String {
         if playing {
             let phase = TeachingPhase(progress: progress, kind: gesture.kind)
-            if gesture.kind == .doubleTap && phase == .action { return progress < 0.42 ? "First tap" : "Second tap" }
+            if (gesture.kind == .doubleTap || gesture.kind.isDoubleTipTap) && phase == .action { return progress < 0.42 ? "First tap" : "Second tap" }
             if gesture.kind == .longTouch && phase == .action { return "Long touch recognized" }
             return phase.title(for: gesture.kind)
         }
@@ -272,7 +272,7 @@ struct GestureFingerPicker: View {
     @Binding var gesture: GestureSpec
     var isStackChild = false
     var body: some View {
-        if gesture.kind == .tipTapMiddle {
+        if gesture.kind == .tipTapMiddle || gesture.kind == .doubleTipTapMiddle {
             Text("2 resting + 1 tapping finger").font(.caption).foregroundStyle(Theme.secondary)
         } else {
             Picker(gesture.kind.isAnchored ? "Resting fingers" : "Fingers", selection: $gesture.fingers) {

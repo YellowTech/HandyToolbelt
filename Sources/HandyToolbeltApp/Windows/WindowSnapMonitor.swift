@@ -302,8 +302,9 @@ final class WindowSnapMonitor {
     private func process(_ input: Input) {
         guard valid(input.generation) else { return }
         if input.type == .leftMouseDragged { record(input.generation) { $0.processedDragCount += 1 } }
+        var applicationPending = false
         defer {
-            if input.type == .leftMouseUp {
+            if input.type == .leftMouseUp && !applicationPending {
                 record(input.generation) { value in
                     if value.reason == nil && value.commitSucceeded == nil {
                         value.reason = value.resolved ? (value.movementConfirmed ? "no_edge_target" : "movement_not_proven") : "identity_not_resolved"
@@ -339,9 +340,31 @@ final class WindowSnapMonitor {
         if input.type == .leftMouseUp {
             self.drag = nil; show(nil, token: input.generation)
             guard let target else { return }
-            let succeeded = drag.movement.commit(target: target, pointer: input.point, window: access) { self.valid(input.generation) }
-            record(input.generation) { $0.commitSucceeded = succeeded; $0.reason = succeeded ? nil : "commit_failed" }
+            // The listen-only tap sees up before the owner necessarily handles it. Give
+            // native dragging time to end, then verify spaced readbacks and repair rollback.
+            applicationPending = true
+            record(input.generation) { $0.stage = "applying" }
+            schedule(0.06) { [weak self] in
+                self?.apply(WindowSnapApplication(target: target), access: access, token: input.generation)
+            }
         } else { show(target, token: input.generation) }
+    }
+    private func apply(_ application: WindowSnapApplication, access: WindowSnapWindowAccess, token: UInt64) {
+        guard valid(token) else { return }
+        var application = application
+        let result = application.advance(window: access) { self.valid(token) }
+        guard valid(token) else { return }
+        switch result {
+        case .pending:
+            schedule(0.10) { [weak self] in self?.apply(application, access: access, token: token) }
+        case .succeeded, .failed:
+            let succeeded: Bool
+            if case .succeeded = result { succeeded = true } else { succeeded = false }
+            record(token) { $0.commitSucceeded = succeeded; $0.reason = succeeded ? nil : "commit_not_stable"; $0.stage = "finished" }
+            lock.lock()
+            if lastInteraction.generation == token { finishInteractionLocked() }
+            lock.unlock()
+        }
     }
     private final class AXWindowAccess: WindowSnapWindowAccess {
         let window: AXUIElement

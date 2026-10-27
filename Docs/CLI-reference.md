@@ -1571,6 +1571,9 @@ Successful result:
           "tipTapLeft",
           "tipTapRight",
           "tipTapMiddle",
+          "doubleTipTapLeft",
+          "doubleTipTapRight",
+          "doubleTipTapMiddle",
           "tipSwipeLeft",
           "tipSwipeRight",
           "tipSwipeUp",
@@ -2415,6 +2418,16 @@ Successful result:
         "minimum" : 0.01,
         "type" : "number"
       },
+      "tipEdgeDeadzone" : {
+        "maximum" : 0.15,
+        "minimum" : 0,
+        "type" : "number"
+      },
+      "tipMaxSeparation" : {
+        "maximum" : 0.8,
+        "minimum" : 0.15,
+        "type" : "number"
+      },
       "tipSeparation" : {
         "maximum" : 0.2,
         "minimum" : 0.02,
@@ -2572,6 +2585,11 @@ Successful result:
     "properties" : {
       "currentAppOnly" : {
         "type" : "boolean"
+      },
+      "gridScale" : {
+        "maximum" : 1.5,
+        "minimum" : 0.75,
+        "type" : "number"
       },
       "includeHidden" : {
         "type" : "boolean"

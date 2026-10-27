@@ -310,3 +310,22 @@ private func sampleWindows() -> [WindowItem] {
     #expect(WindowChooserGeometry.columns(width: 900, previews: true, previewScale: 0.75) > WindowChooserGeometry.columns(width: 900, previews: true, previewScale: 1.5))
     #expect(WindowChooserGeometry.columns(width: 900, previews: false, previewScale: 0.75) == WindowChooserGeometry.columns(width: 900, previews: false, previewScale: 1.5))
 }
+
+@Test func gridSizePersistsIndependentlyAndFitsSmallScreens() throws {
+    var settings = WindowSwitcherSettings()
+    settings.gridScale = 1.4
+    settings.previewScale = 0.8
+    let restored = try JSONDecoder().decode(WindowSwitcherSettings.self, from: JSONEncoder().encode(settings))
+    #expect(restored.gridScale == 1.4 && restored.previewScale == 0.8)
+    #expect(WindowSwitcherSettings.validatedGridScale(.nan) == 1)
+    #expect(WindowSwitcherSettings.validatedGridScale(99) == 1.5)
+    #expect(WindowSwitcherSettings.validatedGridScale(0) == 0.75)
+    let available = CGSize(width: 1600, height: 1100)
+    let small = WindowChooserGeometry.size(available: available, layout: .grid, previews: false, gridScale: 0.75)
+    let large = WindowChooserGeometry.size(available: available, layout: .grid, previews: false, gridScale: 1.5)
+    #expect(large.width > small.width && large.height > small.height)
+    #expect(WindowChooserGeometry.columns(width: large.width, previews: false) > WindowChooserGeometry.columns(width: small.width, previews: false))
+    let bounded = WindowChooserGeometry.size(available: CGSize(width: 640, height: 480), layout: .grid, previews: true, gridScale: 1.5)
+    #expect(bounded.width <= 608 && bounded.height <= 448)
+    #expect(WindowChooserGeometry.size(available: available, layout: .list, previews: true, gridScale: 0.75) == WindowChooserGeometry.size(available: available, layout: .list, previews: true, gridScale: 1.5))
+}

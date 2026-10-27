@@ -8,7 +8,7 @@ struct ProductivityView: View {
 
     var body: some View {
         ModuleHostingSurface(selection: host.section) { section in
-            AnyView(ObservedModuleContent(host: host, trackpad: trackpad, windows: windows, section: section))
+            AnyView(ObservedModuleContent(host: host, trackpad: trackpad, windows: windows, snapping: host.snapping, section: section))
         }
         .mainWindowContentSize()
         .graphiteTheme()
@@ -37,11 +37,12 @@ private struct ObservedModuleContent: View {
     @ObservedObject var host: ProductivityModel
     @ObservedObject var trackpad: AppModel
     @ObservedObject var windows: WindowSwitcherModel
+    @ObservedObject var snapping: WindowSnappingModel
     let section: ProductivitySection
 
     var body: some View {
         Group {
-            if section != .settings && section != .snapping && !moduleEnabled(section) {
+            if section != .settings && (!moduleEnabled(section) || (section == .snapping && !host.snapping.eligible)) {
                 stoppedModule()
             } else {
                 switch section {
@@ -72,11 +73,26 @@ private struct ObservedModuleContent: View {
     }
 
     private func stoppedModule() -> some View {
-        ContentUnavailableView {
-            Label("\(section.title) is turned off", systemImage: section.symbol)
-        } actions: {
-            Button("Open Settings") { host.section = .settings }
+        VStack(spacing: 0) {
+            Image(systemName: section.symbol)
+                .font(.system(size: 40, weight: .regular)).foregroundStyle(Theme.secondary)
+                .frame(width: 70, height: 64)
+            Text(section == .snapping && !host.snapping.eligible ? "Snapping is unavailable" : "\(section.title) is turned off").font(.title2.weight(.semibold))
+                .frame(height: 42)
+            VStack(spacing: 10) {
+                Button("Open Settings") { host.section = .settings }
+                Button("Enable this tool") { host.setModule(section, enabled: true) }
+                    .disabled(section == .snapping && !host.snapping.eligible)
+            }.frame(height: 80)
+            Group {
+                if section == .snapping && !host.snapping.eligible {
+                    Text("Displays have separate Spaces, so macOS window tiling is available.")
+                } else if [.trackpad, .windows, .snapping].contains(section) && !trackpad.hasAccessibility {
+                    Button("Accessibility access required") { host.revealSettings(.accessibility) }
+                } else { Text(" ") }
+            }.font(.callout).foregroundStyle(Theme.secondary).frame(height: 40)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
+
     }
 
     private var settings: some View {
@@ -126,6 +142,15 @@ private struct WindowSettingsView: View {
                     Picker("Layout", selection: $trackpad.configuration.windowSwitcher.layout) {
                         ForEach(WindowLayout.allCases) { layout in Text(layout.title).tag(layout) }
                     }.pickerStyle(.segmented).frame(width: 240)
+                    if trackpad.configuration.windowSwitcher.layout == .grid {
+                        HStack(spacing: 12) {
+                            Text("Grid size").frame(width: 90, alignment: .leading)
+                            Slider(value: $trackpad.configuration.windowSwitcher.gridScale, in: 0.75...1.5, step: 0.05)
+                                .accessibilityLabel("Grid size")
+                            Text(trackpad.configuration.windowSwitcher.gridScale, format: .percent.precision(.fractionLength(0)))
+                                .monospacedDigit().frame(width: 42, alignment: .trailing)
+                        }.frame(maxWidth: 420)
+                    }
                     HStack {
                         Toggle("Window previews", isOn: $trackpad.configuration.windowSwitcher.showsPreviews)
                             .help("Minimized, hidden, and unavailable windows show their app icon.")
@@ -143,6 +168,7 @@ private struct WindowSettingsView: View {
                     }
                     WindowChooserExampleView(layout: trackpad.configuration.windowSwitcher.layout,
                                              showsPreviews: trackpad.configuration.windowSwitcher.showsPreviews,
+                                             gridScale: trackpad.configuration.windowSwitcher.gridScale,
                                              previewScale: trackpad.configuration.windowSwitcher.previewScale)
                 }
 
@@ -201,7 +227,7 @@ struct CoffeeSettingsView: View {
                 Text("Keep your Mac or display awake while you work.").font(.callout).foregroundStyle(Theme.secondary)
             }
             CoffeeControls(model: model)
-            Text("Selections last until you quit HandyToolbelt.").font(.callout).foregroundStyle(Theme.secondary)
+            Text("Disabling Coffee or quitting HandyToolbelt clears both modes.").font(.callout).foregroundStyle(Theme.secondary)
             Spacer()
         }.padding(28).frame(maxWidth: 760, maxHeight: .infinity, alignment: .topLeading)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

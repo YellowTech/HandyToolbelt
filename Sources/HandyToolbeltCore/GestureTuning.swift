@@ -10,13 +10,17 @@ public struct GestureTuning: Codable, Equatable, Sendable {
     public var swipeTravel = 0.13
     public var handAngleDegrees = 0.0
     public var tipSeparation = 0.055
+    public var tipMaxSeparation = 0.45
+    public var tipEdgeDeadzone = 0.04
     public var cornerSize = 0.22
     public init() {}
 
-    private enum CodingKeys: String, CodingKey { case tapDuration, tapTravel, anchorHold, cornerHold, swipeTravel, handAngleDegrees, tipSeparation, cornerSize, longTouchDuration, doubleTapInterval }
+    private enum CodingKeys: String, CodingKey { case tipMaxSeparation, tipEdgeDeadzone, tapDuration, tapTravel, anchorHold, cornerHold, swipeTravel, handAngleDegrees, tipSeparation, cornerSize, longTouchDuration, doubleTapInterval }
     public init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        tipMaxSeparation = try values.decodeIfPresent(Double.self, forKey: .tipMaxSeparation) ?? tipMaxSeparation
+        tipEdgeDeadzone = try values.decodeIfPresent(Double.self, forKey: .tipEdgeDeadzone) ?? tipEdgeDeadzone
         tapDuration = try values.decode(Double.self, forKey: .tapDuration)
         tapTravel = try values.decode(Double.self, forKey: .tapTravel)
         anchorHold = try values.decode(Double.self, forKey: .anchorHold)
@@ -41,6 +45,8 @@ public struct GestureTuning: Codable, Equatable, Sendable {
         "handAngleDegrees": -60...60,
         "tipSeparation": 0.02...0.20,
         "cornerSize": 0.10...0.35,
+        "tipMaxSeparation": 0.15...0.80,
+        "tipEdgeDeadzone": 0...0.15,
     ]
 
     public var validated: Self {
@@ -57,6 +63,8 @@ public struct GestureTuning: Codable, Equatable, Sendable {
         result.swipeTravel = clamp(swipeTravel, Self.bounds["swipeTravel"]!, 0.13)
         result.handAngleDegrees = clamp(handAngleDegrees, Self.bounds["handAngleDegrees"]!, 0)
         result.tipSeparation = clamp(tipSeparation, Self.bounds["tipSeparation"]!, 0.055)
+        result.tipMaxSeparation = clamp(tipMaxSeparation, Self.bounds["tipMaxSeparation"]!, 0.45)
+        result.tipEdgeDeadzone = clamp(tipEdgeDeadzone, Self.bounds["tipEdgeDeadzone"]!, 0.04)
         result.cornerSize = clamp(cornerSize, Self.bounds["cornerSize"]!, 0.22)
         return result
     }

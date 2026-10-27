@@ -92,13 +92,17 @@ struct GestureGymView: View {
                                        display: milliseconds(model.gymTuning.anchorHold))
                             adjustment("Minimum finger spacing", value: $model.gymTuning.tipSeparation, range: GestureTuning.bounds["tipSeparation"]!, step: 0.005,
                                        display: percent(model.gymTuning.tipSeparation))
+                            adjustment("Maximum finger spacing", value: $model.gymTuning.tipMaxSeparation, range: GestureTuning.bounds["tipMaxSeparation"]!, step: 0.005,
+                                       display: percent(model.gymTuning.tipMaxSeparation))
+                            adjustment("Tip-tap edge deadzone", value: $model.gymTuning.tipEdgeDeadzone, range: GestureTuning.bounds["tipEdgeDeadzone"]!, step: 0.005,
+                                       display: percent(model.gymTuning.tipEdgeDeadzone))
                             adjustment("Corner hold time", value: $model.gymTuning.cornerHold, range: GestureTuning.bounds["cornerHold"]!, step: 0.01,
                                        display: milliseconds(model.gymTuning.cornerHold))
                             adjustment("Corner size", value: $model.gymTuning.cornerSize, range: GestureTuning.bounds["cornerSize"]!, step: 0.01,
                                        display: percent(model.gymTuning.cornerSize))
                             adjustment("Swipe distance", value: $model.gymTuning.swipeTravel, range: GestureTuning.bounds["swipeTravel"]!, step: 0.01,
                                        display: percent(model.gymTuning.swipeTravel))
-                            HelpHint("Spacing follows your hand axis as a percentage of surface width. Movement uses normalized surface distance. Hand angle sets anchored finger placement; swipe directions stay aligned to the trackpad.")
+                            HelpHint("Spacing follows your hand axis as a percentage of surface width. The edge deadzone ignores tip-taps too close to the surface boundary. Movement uses normalized surface distance. Hand angle sets anchored finger placement; swipe directions stay aligned to the trackpad.")
                             Button("Restore default detection") { model.gymTuning = GestureTuning() }.controlSize(.small)
                         }.padding(.top, 12).disabled(model.isCalibrating)
             }

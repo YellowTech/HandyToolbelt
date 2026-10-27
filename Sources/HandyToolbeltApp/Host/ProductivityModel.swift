@@ -76,7 +76,10 @@ final class ProductivityModel: ObservableObject {
         case .trackpad: value.trackpadModuleEnabled = enabled
         case .windows: value.windowSwitcher.isEnabled = enabled
         case .snapping: value.snappingModuleEnabled = enabled
-        default: return
+        case .display: value.displayModuleEnabled = enabled
+        case .power: value.powerModuleEnabled = enabled
+        case .coffee: value.coffeeModuleEnabled = enabled
+        case .settings: return
         }
         do { try trackpad.authorizeModuleTransition(to: value); trackpad.configuration = value }
         catch { revealSettings(.accessibility) }

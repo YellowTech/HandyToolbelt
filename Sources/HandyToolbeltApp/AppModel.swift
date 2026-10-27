@@ -259,8 +259,28 @@ final class AppModel: ObservableObject {
         synchronizeFocusedApplication()
     }
 
-    var visibleStacks: [GestureStack] { configuration.stacks.filter { $0.device == selectedDevice } }
-    var visibleBindings: [GestureBinding] { configuration.bindings.filter { $0.device == selectedDevice } }
+    var visibleStacks: [GestureStack] {
+        configuration.stacks.enumerated().filter { $0.element.device == selectedDevice }.sorted {
+            let left = scopeOrder($0.element.applicationGroupID), right = scopeOrder($1.element.applicationGroupID)
+            return left == right ? $0.offset < $1.offset : left < right
+        }.map(\.element)
+    }
+    var visibleBindings: [GestureBinding] {
+        configuration.bindings.enumerated().filter { $0.element.device == selectedDevice }.sorted {
+            let left = scopeOrder($0.element.applicationGroupID), right = scopeOrder($1.element.applicationGroupID)
+            return left == right ? $0.offset < $1.offset : left < right
+        }.map(\.element)
+    }
+    var mappingScopeIDs: [UUID?] {
+        let configured = configuration.applicationGroups.map { Optional($0.id) }
+        let missing = (visibleBindings.map(\.applicationGroupID) + visibleStacks.map(\.applicationGroupID))
+            .compactMap { $0 }.filter { id in !configuration.applicationGroups.contains { $0.id == id } }
+        return [nil] + configured + Array(Set(missing)).sorted { $0.uuidString < $1.uuidString }.map(Optional.some)
+    }
+    private func scopeOrder(_ id: UUID?) -> Int {
+        guard let id else { return 0 }
+        return (configuration.applicationGroups.firstIndex { $0.id == id } ?? configuration.applicationGroups.count) + 1
+    }
     var deviceSummary: String {
         let connected = devices.filter { $0.kind == selectedDevice }
         if let first = connected.first { return first.name + (connected.count > 1 ? " + \(connected.count - 1)" : "") }
@@ -737,8 +757,19 @@ final class AppModel: ObservableObject {
     }
     func addBinding() {
         selectWorkspace(.mappings)
-        // Start disabled: incomplete or duplicate mappings never become active while editing.
-        let binding = GestureBinding(device: selectedDevice, gesture: .init(kind: .tap, fingers: 3), action: .init(kind: .shortcut), isEnabled: false)
+        // A harmless, complete action lets new mappings begin active without executing commands.
+        let candidates: [GestureSpec] = GestureKind.allCases.flatMap { kind -> [GestureSpec] in
+            (1...5).map { GestureSpec(kind: kind, fingers: $0).normalized() }
+        }
+        let available: GestureSpec? = candidates.first(where: { gesture in
+            let candidate = GestureBinding(device: selectedDevice, gesture: gesture, action: .init(kind: .showText, text: "New gesture"))
+            return candidate.action.isValid && candidate.gesture.allowedFingerCounts().contains(candidate.gesture.fingers) &&
+                !(selectedDevice != .trackpad && candidate.gesture.kind == .forceClick) &&
+                configuration.conflictMessages(for: candidate).isEmpty
+        })
+        let binding = GestureBinding(device: selectedDevice, gesture: available ?? .init(kind: .tap, fingers: 3),
+                                     action: .init(kind: .showText, text: "New gesture"), isEnabled: available != nil)
+        if available == nil { errorMessage = "No unused gesture is available. Choose a gesture and app scope before activating this mapping." }
         configuration.bindings.append(binding)
         selectedID = binding.id
     }
@@ -807,19 +838,19 @@ final class AppModel: ObservableObject {
 
     func recognitionTemporalSpecs(for device: InputDevice) -> Set<GestureSpec> {
         if gymActive {
-            return device == selectedDevice && (gymGesture.kind == .longTouch || gymGesture.kind == .doubleTap) ? [gymGesture] : []
+            return device == selectedDevice && (gymGesture.kind == .longTouch || gymGesture.kind == .doubleTap || gymGesture.kind.isDoubleTipTap) ? [gymGesture] : []
         }
         if frontmostBundleID == Bundle.main.bundleIdentifier {
             guard isSelected, workspace == .mappings, device == selectedDevice,
                   let selected = configuration.bindings.first(where: { $0.id == selectedID }),
-                  selected.device == device, (selected.gesture.kind == .longTouch || selected.gesture.kind == .doubleTap) else { return [] }
+                  selected.device == device, (selected.gesture.kind == .longTouch || selected.gesture.kind == .doubleTap || selected.gesture.kind.isDoubleTipTap) else { return [] }
             return [selected.gesture]
         }
         guard canRunActions, !isRecordingShortcut else { return [] }
         // Reserve ambiguous scopes too: dispatch resolves the match, without
         // accidentally falling through to an unrelated single-tap action.
         return Set(configuration.bindings.filter {
-            $0.isEnabled && $0.device == device && ($0.gesture.kind == .longTouch || $0.gesture.kind == .doubleTap) &&
+            $0.isEnabled && $0.device == device && ($0.gesture.kind == .longTouch || $0.gesture.kind == .doubleTap || $0.gesture.kind.isDoubleTipTap) &&
             $0.keyboardModifiers.matches(stackKeyboard.physicalModifiers) && configuration.applies($0, to: frontmostBundleID)
         }.map(\.gesture))
     }
@@ -852,6 +883,7 @@ final class AppModel: ObservableObject {
         }
         guard focusContext.acceptsFrame(deviceID: device.id, hasContacts: !points.isEmpty) else { return }
         var recognizer = recognizers[device.id] ?? GestureRecognizer()
+        recognizer.usesTrackpadEdgeDeadzone = device.kind == .trackpad
         recognizer.tuning = recognitionTuning(for: device.kind)
         recognizer.surfaceAspectRatio = device.aspectRatio
         let previousSequence = recognizer.feedbackSequence

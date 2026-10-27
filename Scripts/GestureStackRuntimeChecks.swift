@@ -134,6 +134,7 @@ import HandyToolbeltCore
         check(pressActions.isEmpty, "Physical modifier mismatch never re-matches a stack press")
         forceRuntime.end(); _ = keyboard.physicalTransition(key: 55, flags: [])
         temporalChecks()
+        anchoredTemporalChecks()
         print("Passed \(checks) gesture stack runtime checks")
     }
     static func temporalChecks() {
@@ -217,6 +218,72 @@ import HandyToolbeltCore
         begin(queued); firstTap(queued)
         RunLoop.main.run(until: Date().addingTimeInterval(0.03))
         check(captures == ["single"], "Queued stack input does not extend an already elapsed deadline")
+        runtime.end()
+    }
+
+    static func anchoredTemporalChecks() {
+        let owner = Contact(id: 10, x: 0.02, y: 0.98)
+        let anchor = Contact(id: 11, x: 0.5, y: 0.5)
+        let tapper = Contact(id: 12, x: 0.7, y: 0.5)
+        let single = GestureStackBinding(gesture: .init(kind: .tipTapRight), actions: [.init(kind: .showText, text: "tip")])
+        let double = GestureStackBinding(gesture: .init(kind: .doubleTipTapRight), actions: [.init(kind: .showText, text: "double tip")])
+        let value = GestureStack(name: "Anchored temporal", corner: .topLeft, bindings: [single, double])
+        var tuning = GestureTuning(); tuning.doubleTapInterval = 0.15
+        var captures: [String] = []
+        let keyboard = StackKeyboardDriver(physicalModifiers: [], emit: { _, _, _, _ in })
+        let runtime = GestureStackRuntime(keyboard: keyboard)
+        runtime.execute = { action, complete in captures.append(action.text); complete(.success("done")) }
+        keyboard.onPhysicalModifiersChanged = { [weak runtime] in runtime?.cancelTemporalGestures() }
+        func frame(_ contacts: [Contact], _ time: Double) {
+            runtime.frame(deviceID: 1, contacts: contacts, time: time, cornerSize: tuning.cornerSize, pressed: false)
+        }
+        func firstTip(_ base: Double, stack: GestureStack = value, resting: Contact = anchor, acting: Contact = tapper) {
+            runtime.begin(stack, deviceID: 1, fingerID: owner.id, time: base, tuning: tuning, aspect: 1.6)
+            frame([owner], base + 0.01)
+            frame([owner, resting], base + 0.03)
+            frame([owner, resting, acting], base + 0.21)
+            frame([owner, resting], base + 0.27)
+        }
+        var base = ProcessInfo.processInfo.systemUptime
+        firstTip(base)
+        check(captures.isEmpty, "Stack double-tip child reserves its matching single under held corner")
+        frame([owner, anchor, tapper], base + 0.34)
+        frame([owner, anchor], base + 0.40)
+        check(captures == ["double tip"], "Production stack double-tip child dispatches exactly once")
+        runtime.end(); captures = []
+        base = ProcessInfo.processInfo.systemUptime
+        firstTip(base)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.47))
+        check(captures == ["tip"], "Stack anchored single expires while corner and resting finger stay held")
+        runtime.end(); captures = []
+        for cancellation in 0..<4 {
+            base = ProcessInfo.processInfo.systemUptime
+            firstTip(base)
+            switch cancellation {
+            case 0: frame([owner], base + 0.30)
+            case 1: runtime.end()
+            case 2:
+                _ = keyboard.physicalTransition(key: 55, flags: .maskCommand)
+                _ = keyboard.physicalTransition(key: 55, flags: [])
+            default: frame([anchor], base + 0.30)
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.47))
+            check(captures.isEmpty, "Stack anchored reservation cancels on anchor/end/modifier/corner loss \(cancellation)")
+            runtime.end()
+        }
+        // Mouse contacts have different surface-edge semantics; the stack must
+        // apply the same device policy as ordinary mappings.
+        var mouse = value; mouse.device = .magicMouse; mouse.bindings = [single]
+        let rimAnchor = Contact(id: 11, x: 0.02, y: 0.5)
+        let rimTapper = Contact(id: 12, x: 0.22, y: 0.5)
+        base = ProcessInfo.processInfo.systemUptime
+        firstTip(base, stack: mouse, resting: rimAnchor, acting: rimTapper)
+        check(captures == ["tip"], "Mouse stack does not inherit trackpad rim exclusion")
+        runtime.end(); captures = []
+        var trackpad = value; trackpad.bindings = [single]
+        base = ProcessInfo.processInfo.systemUptime
+        firstTip(base, stack: trackpad, resting: rimAnchor, acting: rimTapper)
+        check(captures.isEmpty, "Trackpad stack keeps rim resting-finger exclusion")
         runtime.end()
     }
 

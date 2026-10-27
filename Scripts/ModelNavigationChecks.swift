@@ -98,6 +98,10 @@ struct ModelNavigationChecks {
         check(shown == 6, "Accessibility, keyboard and right-button activations open without reopening on release")
 
         host.trackpad.configuration.trackpadModuleEnabled = true
+        host.trackpad.configuration.windowSwitcher.isEnabled = true
+        host.trackpad.configuration.displayModuleEnabled = true
+        host.trackpad.configuration.powerModuleEnabled = true
+        host.trackpad.configuration.coffeeModuleEnabled = true
         var routes: [ProductivitySection] = []
         let status = StatusMenu(host: host, reveal: { routes.append($0) })
         func item(_ action: StatusMenu.Action) -> NSMenuItem {
@@ -680,7 +684,26 @@ struct ModelNavigationChecks {
         let beforeBindings = routing.configuration.bindings.count
         routing.addBinding()
         check(routing.workspace == .mappings && routing.configuration.bindings.count == beforeBindings + 1, "New Gesture routes to mapping editor")
-        check(routing.configuration.bindings.last?.id == routing.selectedID && routing.configuration.bindings.last?.isEnabled == false, "New Gesture selects inactive new mapping")
+        check(routing.configuration.bindings.last?.id == routing.selectedID && routing.configuration.bindings.last?.isEnabled == true, "New Gesture selects active new mapping")
+        check(routing.configuration.bindings.last?.action.kind == .showText && routing.configuration.bindings.last?.action.text == "New gesture" && routing.configuration.validation().errors.isEmpty, "New Gesture uses a valid harmless action and avoids existing conflicts")
+        let sortedSelection = routing.selectedID
+        let firstGroup = routing.configuration.applicationGroups.first!.id
+        let lastGroup = routing.configuration.applicationGroups.last!.id
+        let everywhere = GestureBinding(gesture: .init(kind: .tap), action: .init(kind: .showText, text: "Everywhere"), isEnabled: false)
+        let firstScoped = GestureBinding(gesture: .init(kind: .tap), action: .init(kind: .showText, text: "First"), isEnabled: false, applicationGroupID: firstGroup)
+        let secondScoped = GestureBinding(gesture: .init(kind: .tap), action: .init(kind: .showText, text: "Second"), isEnabled: false, applicationGroupID: firstGroup)
+        let lastScoped = GestureBinding(gesture: .init(kind: .tap), action: .init(kind: .showText, text: "Last"), isEnabled: false, applicationGroupID: lastGroup)
+        let originalBindings = routing.configuration.bindings
+        routing.configuration.bindings = [lastScoped, firstScoped, everywhere, secondScoped]
+        check(routing.visibleBindings.map(\.id) == [everywhere.id, firstScoped.id, secondScoped.id, lastScoped.id], "Mappings sort Everywhere first, then configured app groups with stable intra-group order")
+        check(routing.selectedID == sortedSelection && routing.mappingScopeIDs.first! == nil && routing.mappingScopeIDs.dropFirst().prefix(routing.configuration.applicationGroups.count).compactMap { $0 } == routing.configuration.applicationGroups.map(\.id), "Scope ordering preserves selection and configured group order")
+        routing.configuration.bindings = originalBindings
+        let completeBindings = routing.configuration.bindings
+        routing.configuration.bindings.append(.init(gesture: .init(kind: .tap, fingers: 2), action: .init(kind: .shortcut)))
+        routing.addBinding()
+        check(routing.configuration.bindings.last?.isEnabled == true && routing.configuration.bindings.last?.action.isValid == true, "An unrelated incomplete action does not prevent a new valid mapping from starting active")
+        routing.configuration.bindings = completeBindings
+        routing.selectedID = sortedSelection
         let savedAfterMapping = try routingStorage.load()
         check(routing.hasUnappliedGymChanges && savedAfterMapping.trackpadTuning.handAngleDegrees == 0, "Saving new mapping does not save Gym draft")
         routing.selectDevice(.magicMouse)
@@ -905,12 +928,16 @@ struct ModelNavigationChecks {
         coffee!.set(keepDisplayAwake: false)
         check(coffee!.isEffective(.preventIdleSleep) && !coffee!.isEffective(.keepDisplayAwake) && released.count == 1, "Display mode releases independently")
         coffee!.configure(enabled: false, running: true)
-        check(!coffee!.isActive && coffee!.preventIdleSleep, "Disabling releases but preserves runtime selections")
+        check(!coffee!.isActive && !coffee!.preventIdleSleep && !coffee!.keepDisplayAwake, "Disabling releases assertions and clears runtime selections")
         coffee!.configure(enabled: true, running: true)
-        check(coffee!.isActive && created.count == 3, "Enabling reapplies selection")
+        check(!coffee!.isActive && created.count == 2, "Re-enabling Coffee does not resume a previous mode")
+        coffee!.set(preventIdleSleep: true, keepDisplayAwake: true)
         coffee!.configure(enabled: false, running: true)
-        check(!coffee!.isActive && coffee!.preventIdleSleep, "Module off releases and preserves selection")
+        check(!coffee!.isActive && !coffee!.preventIdleSleep && !coffee!.keepDisplayAwake, "Module off clears both modes")
+        coffee!.set(preventIdleSleep: true)
+        check(!coffee!.preventIdleSleep && !coffee!.isActive, "Disabled Coffee cannot retain an activation request")
         coffee!.configure(enabled: true, running: true)
+        coffee!.set(preventIdleSleep: true)
         failCreate = .keepDisplayAwake
         coffee!.set(keepDisplayAwake: true)
         check(coffee!.isEffective(.preventIdleSleep) && !coffee!.isEffective(.keepDisplayAwake) && coffee!.errorMessage != nil, "Partial acquisition exposes error and actual active state")
@@ -931,6 +958,7 @@ struct ModelNavigationChecks {
         let freshCoffee = CoffeeModel(driver: driver)
         check(!freshCoffee.preventIdleSleep && !freshCoffee.keepDisplayAwake, "Selections reset for a fresh process model")
         var legacyObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfiguration())) as! [String: Any]
+        legacyObject["version"] = 5
         legacyObject.removeValue(forKey: "coffeeModuleEnabled")
         let migrated = try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: legacyObject))
         check(migrated.coffeeModuleEnabled, "Legacy settings enable Coffee with no active selection")

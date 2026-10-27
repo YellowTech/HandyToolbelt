@@ -178,6 +178,7 @@ final class GestureStackRuntime {
         guard stack == nil else { return }
         generation = UUID(); stack = value; self.deviceID = deviceID; self.fingerID = fingerID; lastFrame = time
         recognizer = GestureRecognizer(); recognizer.tuning = tuning; recognizer.surfaceAspectRatio = aspect
+        recognizer.usesTrackpadEdgeDeadzone = value.device == .trackpad
         needsPrime = true; queue = value.startActions; busy = false; drain()
     }
     func frame(deviceID: UInt64, contacts: [Contact], time: Double, cornerSize: Double, pressed: Bool) {
@@ -196,7 +197,7 @@ final class GestureStackRuntime {
         }
         let eligible = Set(stack.bindings.filter {
             $0.isEnabled && $0.keyboardModifiers.matches(keyboard.physicalModifiers) &&
-            ($0.gesture.kind == .longTouch || $0.gesture.kind == .doubleTap)
+            ($0.gesture.kind == .longTouch || $0.gesture.kind == .doubleTap || $0.gesture.kind.isDoubleTipTap)
         }.map { binding in
             var spec = binding.gesture; spec.corner = stack.corner; return spec
         })

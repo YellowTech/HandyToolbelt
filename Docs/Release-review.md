@@ -1,5 +1,19 @@
 # HandyToolbelt release review
 
+## Tester feedback — 0.28.0 (61), 2026-10-27
+
+Three Sol implementation agents handled gestures, window behavior, and settings UI, followed by primary-agent integration and review. Review caught missing production stack wiring for double tip-taps, a dropped single when a different second tip began, repeated icon lookups, and an obsolete snapping commit path; these were corrected.
+
+Regression coverage now includes moving then settling a resting finger, spacing/rim rejection, double tip-taps and cancellation, real deferred dispatch with anchors held, fresh-install defaults and saved choices, Coffee assertion release/reset, active new mappings and scope ordering, delayed AX size readbacks and rollback repair, cancellation during snapping writes, and multi-display/grid geometry.
+
+All verification stages passed: unit/contract tests, 400/401 model checks, native window/lifecycle and gesture performance checks, 54 activation checks, 35 chooser-flow checks, 22 snapping-pipeline checks (including 100 cycles), 181 CLI checks, 58 stack checks, 52 native-click checks, 39 temporal checks, 53 settings-transfer checks, and login-item checks. Temporal checks were rerun separately after correcting a fixture that expired 50 ms before its configured deadline; transfer/login checks then completed separately. No production fix was required for that fixture error.
+
+Native rendered review covered six disabled tool pages, mappings, app groups, and the Switcher layout preview. Release compilation and strict signature verification passed. The signed candidate is staged separately; the running app and user configuration were not replaced. Evidence is under `.build/feedback-*`, including UI snapshots in `.build/feedback-ui-review/`.
+
+Still required on the affected Mac: physically drag Safari/Finder windows to top and side targets on both internal and external displays. Synthetic AX/event tests cannot confirm that Mac's native drag timing or window constraints.
+
+## Earlier review
+
 Review date: 2026-10-26. Historical candidate: early build 0.25.4 (50). The checks recorded below predate the HandyToolbelt rename and do not validate 0.27.0 (60). Paths and commands below use current names for navigation.
 
 The feature set is frozen for this review. The work concentrates on correctness, recoverability, lifecycle boundaries, and useful regression coverage. This is a source review and local validation, not a substitute for testing other macOS versions and hardware.

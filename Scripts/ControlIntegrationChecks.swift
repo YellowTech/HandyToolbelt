@@ -71,6 +71,7 @@ struct ControlIntegrationChecks {
         socketPath = directory.appendingPathComponent("control.sock").path
         let store = ConfigurationStore(url: directory.appendingPathComponent("settings.json"))
         var config = AppConfiguration(); config.bindings = []; config.trackpadModuleEnabled = false; config.windowSwitcher.isEnabled = false
+        config.coffeeModuleEnabled = true; config.displayModuleEnabled = true
         let signal = GestureAction(kind: .showText, text: "Signal")
         let complete = SavedAutomation(name: "Complete", steps: [.init(name: "Wait", delay: 0.05), .init(name: "Signal", action: signal)])
         let wait = SavedAutomation(name: "Wait", steps: [.init(name: "Wait", delay: 2), .init(name: "Must not execute", action: signal)])
@@ -303,7 +304,7 @@ struct ControlIntegrationChecks {
         _ = try result(call("config.apply", ["configuration": try .init(encoding: paused), "expectedRevision": .string(try config.revision())]))
         check(runner.active != nil && executed.count == 3, "Tool switches preserve independent automation runs")
         runner.stop()
-        check(heldAssertions.isEmpty && coffee.preventIdleSleep && coffee.keepDisplayAwake, "CLI Disabled tools releases Coffee and retains selections")
+        check(heldAssertions.isEmpty && !coffee.preventIdleSleep && !coffee.keepDisplayAwake, "Disabling Coffee through the CLI releases assertions and clears selections")
         let pausedCoffee = try call("coffee.set", ["preventIdleSleep": .bool(true)])
         check(pausedCoffee.0.error?.code == "unavailable" && heldAssertions.isEmpty, "CLI cannot activate Coffee while disabled")
         _ = try result(call("coffee.set", ["preventIdleSleep": .bool(false), "keepDisplayAwake": .bool(false)]))

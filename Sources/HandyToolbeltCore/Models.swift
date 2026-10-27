@@ -8,7 +8,7 @@ public enum InputDevice: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 public enum GestureKind: String, Codable, CaseIterable, Identifiable, Sendable {
-    case tap, longTouch, doubleTap, click, forceClick, tipTapLeft, tipTapRight, tipTapMiddle, tipSwipeLeft, tipSwipeRight, tipSwipeUp, tipSwipeDown, swipeLeft, swipeRight, swipeUp, swipeDown
+    case tap, longTouch, doubleTap, click, forceClick, tipTapLeft, tipTapRight, tipTapMiddle, doubleTipTapLeft, doubleTipTapRight, doubleTipTapMiddle, tipSwipeLeft, tipSwipeRight, tipSwipeUp, tipSwipeDown, swipeLeft, swipeRight, swipeUp, swipeDown
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -17,6 +17,9 @@ public enum GestureKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .doubleTap: return "Double tap"
         case .click: return "Click"
         case .forceClick: return "Force click"
+        case .doubleTipTapLeft: return "Double tip-tap left"
+        case .doubleTipTapRight: return "Double tip-tap right"
+        case .doubleTipTapMiddle: return "Double tip-tap middle"
         case .tipTapLeft: return "Tip-tap left"
         case .tipTapRight: return "Tip-tap right"
         case .tipTapMiddle: return "Tip-tap middle"
@@ -30,10 +33,19 @@ public enum GestureKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .swipeDown: return "Swipe down"
         }
     }
-    public var isTipTap: Bool { self == .tipTapLeft || self == .tipTapRight || self == .tipTapMiddle }
+    public var isDoubleTipTap: Bool { [.doubleTipTapLeft, .doubleTipTapRight, .doubleTipTapMiddle].contains(self) }
+    public var isTipTap: Bool { [.tipTapLeft, .tipTapRight, .tipTapMiddle].contains(self) || isDoubleTipTap }
+    public var doubleTipTapKind: GestureKind? {
+        switch self {
+        case .tipTapLeft: return .doubleTipTapLeft
+        case .tipTapRight: return .doubleTipTapRight
+        case .tipTapMiddle: return .doubleTipTapMiddle
+        default: return nil
+        }
+    }
     public var isTipSwipe: Bool { [.tipSwipeLeft, .tipSwipeRight, .tipSwipeUp, .tipSwipeDown].contains(self) }
     public var isAnchored: Bool { isTipTap || isTipSwipe }
-    public var defaultFingerCount: Int { self == .tipTapMiddle || !isAnchored ? 3 : 2 }
+    public var defaultFingerCount: Int { self == .tipTapMiddle || self == .doubleTipTapMiddle || !isAnchored ? 3 : 2 }
     public var isSwipe: Bool { [.swipeLeft, .swipeRight, .swipeUp, .swipeDown].contains(self) }
     public var symbol: String {
         switch self {
@@ -42,9 +54,9 @@ public enum GestureKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .doubleTap: return "hand.tap.fill"
         case .click: return "hand.point.up.left"
         case .forceClick: return "hand.point.up.left.fill"
-        case .tipTapLeft: return "arrow.left.to.line"
-        case .tipTapRight: return "arrow.right.to.line"
-        case .tipTapMiddle: return "arrow.down.to.line"
+        case .tipTapLeft, .doubleTipTapLeft: return "arrow.left.to.line"
+        case .tipTapRight, .doubleTipTapRight: return "arrow.right.to.line"
+        case .tipTapMiddle, .doubleTipTapMiddle: return "arrow.down.to.line"
         case .tipSwipeLeft: return "arrow.left"
         case .tipSwipeRight: return "arrow.right"
         case .tipSwipeUp: return "arrow.up"
@@ -92,7 +104,7 @@ public struct GestureSpec: Codable, Hashable, Sendable {
     public var totalFingerCount: Int { fingers + (corner == .none ? 0 : 1) }
     public func allowedFingerCounts(isStackChild: Bool = false) -> [Int] {
         if kind == .forceClick { return Array(1...(corner != .none || isStackChild ? 4 : 5)) }
-        if kind == .tipTapMiddle { return [3] }
+        if kind == .tipTapMiddle || kind == .doubleTipTapMiddle { return [3] }
         if kind.isAnchored { return Array(2...4) }
         return Array((corner != .none || isStackChild ? 1 : 2)...(corner != .none || isStackChild ? 4 : 5))
     }
@@ -244,9 +256,9 @@ public struct GestureBinding: Codable, Identifiable, Equatable, Sendable {
 
 public struct AppConfiguration: Codable, Sendable {
     public var automations: [SavedAutomation] = []
-    public var displayModuleEnabled = true
-    public var powerModuleEnabled = true
-    public var coffeeModuleEnabled = true
+    public var displayModuleEnabled = false
+    public var powerModuleEnabled = false
+    public var coffeeModuleEnabled = false
     public var snappingModuleEnabled = false
     public var stacks: [GestureStack] = []
     public var version = 6
@@ -270,9 +282,9 @@ public struct AppConfiguration: Codable, Sendable {
         version = 6
         stacks = try values.decodeIfPresent([GestureStack].self, forKey: .stacks) ?? []
         automations = try values.decodeIfPresent([SavedAutomation].self, forKey: .automations) ?? []
-        powerModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .powerModuleEnabled) ?? true
-        coffeeModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .coffeeModuleEnabled) ?? true
-        displayModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .displayModuleEnabled) ?? true
+        powerModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .powerModuleEnabled) ?? (storedVersion < 6)
+        coffeeModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .coffeeModuleEnabled) ?? (storedVersion < 6)
+        displayModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .displayModuleEnabled) ?? (storedVersion < 6)
         bindings = try values.decode([GestureBinding].self, forKey: .bindings)
         trackpadTuning = try values.decodeIfPresent(GestureTuning.self, forKey: .trackpadTuning)?.validated ?? GestureTuning()
         mouseTuning = try values.decodeIfPresent(GestureTuning.self, forKey: .mouseTuning)?.validated ?? GestureTuning()
@@ -286,6 +298,7 @@ public struct AppConfiguration: Codable, Sendable {
             coffeeModuleEnabled = coffeeModuleEnabled && !paused
         }
         windowSwitcher = try values.decodeIfPresent(WindowSwitcherSettings.self, forKey: .windowSwitcher) ?? .init()
+        if !values.contains(.windowSwitcher), storedVersion < 6 { windowSwitcher.isEnabled = true }
         if storedVersion < 4, try values.decodeIfPresent(Bool.self, forKey: .pauseAll) == true { windowSwitcher.isEnabled = false }
         snappingModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .snappingModuleEnabled) ?? (windowSwitcher.isEnabled && windowSwitcher.snappingEnabled)
         windowSwitcher.snappingEnabled = false

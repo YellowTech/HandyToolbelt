@@ -154,6 +154,7 @@ import HandyToolbeltCore
    model.configuration.trackpadModuleEnabled = true
    model.configuration.windowSwitcher.isEnabled = true
    model.configuration.powerModuleEnabled = true
+   model.configuration.displayModuleEnabled = true
    let binding = GestureBinding(gesture: .init(kind: .tap), action: .init(kind: .showText, text: "MODULE-EDITOR"), isEnabled: false)
    model.configuration.bindings = [binding]; model.selectedID = binding.id
    host.section = .display

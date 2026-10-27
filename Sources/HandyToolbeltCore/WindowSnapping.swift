@@ -165,20 +165,7 @@ public struct WindowSnapDrag {
            down.y - pointer.y < 8 { return nil }
         return target
     }
-    /// A public AX setter already in flight cannot be revoked. Token checks prevent all later writes.
-    @discardableResult public mutating func commit(target: CGRect, pointer: CGPoint,
-        window: WindowSnapWindowAccess, isCurrent: () -> Bool) -> Bool {
-        guard isCurrent(), window.isEligibleAndActive(), let frame = window.readFrame(),
-              observe(frame: frame, pointer: pointer), isCurrent() else { return false }
-        guard window.setSize(target.size), isCurrent(), let resized = window.readFrame() else { return false }
-        guard abs(resized.width-target.width) < 2, abs(resized.height-target.height) < 2 else {
-            // Apps can report success while enforcing their minimum size. Restore once, best effort.
-            if isCurrent(), window.isEligibleAndActive(), isCurrent() { _ = window.setSize(frame.size) }
-            return false
-        }
-        guard window.isEligibleAndActive(), isCurrent() else { return false }
-        return window.setPosition(target.origin)
-    }
+
 }
 
 /// Immutable public WindowServer metadata; selecting a PID performs no AX requests.
@@ -241,5 +228,50 @@ public struct WindowSnapDiagnosticsSnapshot: Codable, Equatable, Sendable {
         guard interaction.completed, interaction.mouseDragCount > 0 else { return }
         completedDrags.append(interaction)
         if completedDrags.count > 8 { completedDrags.removeFirst(completedDrags.count - 8) }
+    }
+}
+
+/// Release-time AX success is provisional: the owning app can still finish its native drag.
+/// The adapter schedules observations on its serial worker, never blocking an input callback.
+public struct WindowSnapApplication {
+    public let target: CGRect
+    public private(set) var attempts = 0
+    private var matchingObservations = 0
+    private var awaitingSizeFrom: CGRect?
+    public init(target: CGRect) { self.target = target }
+    public static func matches(_ frame: CGRect, _ target: CGRect) -> Bool {
+        abs(frame.minX-target.minX) < 2 && abs(frame.minY-target.minY) < 2 &&
+        abs(frame.width-target.width) < 2 && abs(frame.height-target.height) < 2
+    }
+    public enum Result { case pending, succeeded, failed }
+    /// Two spaced matches establish stability; a rollback triggers at most three applications.
+    public mutating func advance(window: WindowSnapWindowAccess, isCurrent: () -> Bool) -> Result {
+        guard isCurrent(), window.isEligibleAndActive(), isCurrent(), let frame = window.readFrame(), isCurrent() else { return .failed }
+        if let original = awaitingSizeFrom {
+            awaitingSizeFrom = nil
+            guard abs(frame.width-target.width) < 2, abs(frame.height-target.height) < 2 else {
+                if isCurrent(), window.isEligibleAndActive(), isCurrent() { _ = window.setSize(original.size) }
+                return .failed
+            }
+            guard isCurrent(), window.isEligibleAndActive(), isCurrent(), window.setPosition(target.origin), isCurrent() else { return .failed }
+            return .pending
+        }
+        if Self.matches(frame, target) {
+            matchingObservations += 1
+            return matchingObservations >= 2 ? .succeeded : .pending
+        }
+        matchingObservations = 0
+        guard attempts < 3, isCurrent(), window.isEligibleAndActive(), isCurrent() else { return .failed }
+        attempts += 1
+        guard window.setSize(target.size), isCurrent(), window.isEligibleAndActive(), isCurrent(),
+              let resized = window.readFrame(), isCurrent() else { return .failed }
+        guard abs(resized.width-target.width) < 2, abs(resized.height-target.height) < 2 else {
+            // AX success may precede the owner's layout update. Allow one spaced
+            // observation before treating a mismatch as a genuine size constraint.
+            awaitingSizeFrom = frame
+            return .pending
+        }
+        guard isCurrent(), window.isEligibleAndActive(), isCurrent(), window.setPosition(target.origin), isCurrent() else { return .failed }
+        return .pending
     }
 }

@@ -141,6 +141,37 @@ import HandyToolbeltCore
         fresh(); oneTap(); touch(0.27); touch(0.31); lift(0.35); drain()
         check(output == ["double"], "Background Gym does not suppress another app's mappings")
 
+        model.selectWorkspace(.mappings)
+        let tipSingle = mapping(.tipTapRight, "tip"), tipDouble = mapping(.doubleTipTapRight, "double tip")
+        model.configuration.bindings = [tipSingle, tipDouble]
+        let resting = Array(points.prefix(2))
+        let tapping = resting + [Contact(id: 8, x: 0.7, y: 0.5)]
+        func oneTip() {
+            touch(0.01, contacts: resting)
+            touch(0.21, contacts: tapping)
+            touch(0.27, contacts: resting)
+        }
+        fresh(); oneTip(); drain()
+        check(output.isEmpty, "Enabled double tip-tap reserves its matching single")
+        expire()
+        check(output.isEmpty, "Tip single stays reserved until its release-relative deadline")
+        model.finishTemporalGestures(for: device.id, at: time + 0.60); drain()
+        check(output == ["tip"], "Tip single expires while anchors remain down")
+        fresh(); oneTip()
+        touch(0.36, contacts: tapping); touch(0.43, contacts: resting); drain(); model.finishTemporalGestures(for: device.id, at: time + 0.8); drain()
+        check(output == ["double tip"], "Double tip-tap dispatches once through enabled mapping eligibility")
+        fresh(); oneTip(); lift(0.30); model.finishTemporalGestures(for: device.id, at: time + 0.8); drain()
+        check(output.isEmpty, "Losing anchors cancels a deferred single tip-tap")
+        model.configuration.bindings = [tipSingle]
+        fresh(); oneTip(); drain()
+        check(output == ["tip"], "Single tip-tap stays immediate without an enabled matching double")
+
+        model.configuration.bindings = [tipSingle, tipDouble]
+        time = ProcessInfo.processInfo.systemUptime + 0.01
+        model.receive(device, [], time); output = []
+        oneTip(); drain(0.65)
+        check(output == ["tip"], "Scheduled tip deadline dispatches with resting fingers held and no further frames")
+
         // One real main-queue deadline proves the integration works without a
         // subsequent hardware frame; the other checks use explicit virtual time.
         model.selectWorkspace(.mappings); model.configuration.bindings = [tap, double]

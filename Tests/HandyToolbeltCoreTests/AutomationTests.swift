@@ -3,8 +3,10 @@ import XCTest
 
 final class AutomationTests: XCTestCase {
     func testLegacyMigrationAndCanonicalRevision() throws {
-        let config = AppConfiguration()
+        var config = AppConfiguration()
+        config.displayModuleEnabled = true
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
+        json["version"] = 5
         json.removeValue(forKey: "automations"); json.removeValue(forKey: "displayModuleEnabled")
         let migrated = try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: json))
         XCTAssertTrue(migrated.displayModuleEnabled); XCTAssertTrue(migrated.automations.isEmpty)

@@ -5,6 +5,7 @@ import HandyToolbeltCore
 struct WindowChooserExampleView: View {
     let layout: WindowLayout
     let showsPreviews: Bool
+    var gridScale: Double = 1
     var previewScale: Double = 1
 
     private static let items: [WindowItem] = [
@@ -18,6 +19,7 @@ struct WindowChooserExampleView: View {
         result.layout = layout
         result.showsPreviews = showsPreviews
         result.previewScale = previewScale
+        result.gridScale = gridScale
         return result
     }
 
@@ -26,13 +28,15 @@ struct WindowChooserExampleView: View {
             Text("Layout preview · example windows")
                 .font(.caption).foregroundStyle(Theme.secondary)
             GeometryReader { geometry in
+                let width = layout == .grid ? 900 * WindowSwitcherSettings.validatedGridScale(gridScale) : geometry.size.width / 0.9
+                let scale = min(0.9, geometry.size.width / width)
                 WindowChooserContent(items: Array(Self.items.prefix(showsPreviews && (layout == .list || previewScale > 1) ? 2 : 3)), settings: settings, selectedID: Self.items[1].id,
                     isLoading: false, message: "", images: [:], hasPreviewPermission: true,
                     onChoose: { _ in }, onCancel: {}, onVisible: { _ in }, exampleMode: true,
                     iconProvider: { AnyView(ExampleWindowIcon(item: $0)) },
                     previewProvider: { AnyView(ExampleWindowThumbnail(item: $0)) })
-                    .frame(width: geometry.size.width / 0.9, height: 326)
-                    .scaleEffect(0.9, anchor: .topLeading)
+                    .frame(width: width, height: 294 / scale)
+                    .scaleEffect(scale, anchor: .topLeading)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }.frame(height: 294)

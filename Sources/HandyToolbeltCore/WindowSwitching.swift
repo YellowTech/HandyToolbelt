@@ -23,7 +23,7 @@ public enum WindowLayout: String, Codable, CaseIterable, Identifiable, Sendable 
 }
 
 public struct WindowSwitcherSettings: Codable, Equatable, Sendable {
-    public var isEnabled = true
+    public var isEnabled = false
     public var shortcut: WindowShortcut = .optionTab
     public var currentAppOnly = false
     public var includeMinimized = true
@@ -32,11 +32,13 @@ public struct WindowSwitcherSettings: Codable, Equatable, Sendable {
     public var showsPreviews = false
     /// Read only for migrating configurations written before Snapping became independent.
     public var snappingEnabled = false
+    public var gridScale: Double = 1
+    public static func validatedGridScale(_ value: Double) -> Double { value.isFinite ? min(1.5, max(0.75, value)) : 1 }
     public var previewScale: Double = 1
     public static func validatedPreviewScale(_ value: Double) -> Double { value.isFinite ? min(1.5, max(0.75, value)) : 1 }
     public init() {}
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, shortcut, currentAppOnly, includeMinimized, includeHidden, layout, showsPreviews, snappingEnabled, previewScale
+        case isEnabled, shortcut, currentAppOnly, includeMinimized, includeHidden, layout, showsPreviews, snappingEnabled, previewScale, gridScale
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -48,6 +50,7 @@ public struct WindowSwitcherSettings: Codable, Equatable, Sendable {
         layout = try values.decodeIfPresent(WindowLayout.self, forKey: .layout) ?? .list
         showsPreviews = try values.decodeIfPresent(Bool.self, forKey: .showsPreviews) ?? false
         snappingEnabled = try values.decodeIfPresent(Bool.self, forKey: .snappingEnabled) ?? false
+        gridScale = Self.validatedGridScale(try values.decodeIfPresent(Double.self, forKey: .gridScale) ?? 1)
         previewScale = Self.validatedPreviewScale(try values.decodeIfPresent(Double.self, forKey: .previewScale) ?? 1)
     }
     public func encode(to encoder: Encoder) throws {
@@ -59,6 +62,7 @@ public struct WindowSwitcherSettings: Codable, Equatable, Sendable {
         try values.encode(includeHidden, forKey: .includeHidden)
         try values.encode(layout, forKey: .layout)
         try values.encode(showsPreviews, forKey: .showsPreviews)
+        try values.encode(Self.validatedGridScale(gridScale), forKey: .gridScale)
         try values.encode(Self.validatedPreviewScale(previewScale), forKey: .previewScale)
     }
 
@@ -200,9 +204,9 @@ public struct WindowPreviewLifetime: Sendable {
 }
 
 public enum WindowChooserGeometry {
-    public static func size(available: CGSize, layout: WindowLayout, previews: Bool, previewScale: Double = 1) -> CGSize {
-        CGSize(width: max(1, min(max(1, available.width - 32), layout == .grid ? 900 : (previews ? 660 * WindowSwitcherSettings.validatedPreviewScale(previewScale) : 570))),
-               height: max(1, min(max(1, available.height - 32), layout == .grid || previews ? 580 : 420)))
+    public static func size(available: CGSize, layout: WindowLayout, previews: Bool, previewScale: Double = 1, gridScale: Double = 1) -> CGSize {
+        CGSize(width: max(1, min(max(1, available.width - 32), layout == .grid ? 900 * WindowSwitcherSettings.validatedGridScale(gridScale) : (previews ? 660 * WindowSwitcherSettings.validatedPreviewScale(previewScale) : 570))),
+               height: max(1, min(max(1, available.height - 32), layout == .grid ? 580 * WindowSwitcherSettings.validatedGridScale(gridScale) : (previews ? 580 : 420))))
     }
     public static func columns(width: Double, previews: Bool, previewScale: Double = 1) -> Int {
         max(1, Int((max(1, width) - 24) / (previews ? 210 * WindowSwitcherSettings.validatedPreviewScale(previewScale) : 170)))

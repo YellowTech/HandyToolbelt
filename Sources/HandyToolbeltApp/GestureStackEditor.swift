@@ -13,6 +13,8 @@ struct GestureStackEditor: View {
                     TextField("Stack name", text: $stack.name).textFieldStyle(.plain).font(.system(size: 23, weight: .semibold))
                     Toggle("Active", isOn: Binding(get: { stack.isEnabled }, set: activate))
                         .toggleStyle(.switch).controlSize(.small).fixedSize()
+                    Button(role: .destructive) { confirmingDeletion = true } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless).help("Delete stack").accessibilityLabel("Delete stack")
                 }
                 if stack.isEnabled || activationAttempted {
                     ForEach(validationMessages, id: \.self) { message in
@@ -79,11 +81,7 @@ struct GestureStackEditor: View {
                 Text("When released").font(.headline)
                 Label("Release all held keys", systemImage: "keyboard").foregroundStyle(Theme.secondary)
                 ActionSequenceEditor(model: model, actions: $stack.releaseActions)
-                HStack {
-                    Spacer()
-                    Button(role: .destructive) { confirmingDeletion = true } label: { Image(systemName: "trash") }
-                        .buttonStyle(.borderless).help("Delete stack").accessibilityLabel("Delete stack")
-                }
+
             }.padding(24)
         }
         .confirmationDialog("Delete this gesture stack?", isPresented: $confirmingDeletion) {

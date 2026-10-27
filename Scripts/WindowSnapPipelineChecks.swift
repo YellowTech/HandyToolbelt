@@ -62,6 +62,39 @@ private final class Rig {
             precondition(r.other.writes.isEmpty && r.routes.first!.0 == 42 && r.routes.first!.1 == 99)
             precondition(r.diagnostics.completed && r.diagnostics.commitSucceeded == true)
         }
+        check("accepted AX writes rolled back by native drag are reapplied and verified") { r in
+            r.send(.leftMouseDown); r.run(); r.moveTop(); r.run(); r.send(.leftMouseUp, 300, 44)
+            // Process release, then the delayed first application.
+            r.runOne(); r.runOne()
+            precondition(r.window.writes == ["size", "position"])
+            precondition(r.diagnostics.commitSucceeded == nil && !r.diagnostics.completed)
+            r.window.frame = CGRect(x: 200, y: 24, width: 400, height: 300)
+            r.run()
+            precondition(r.window.writes == ["size", "position", "size", "position"])
+            precondition(r.window.frame == CGRect(x: 0, y: 24, width: 1000, height: 776))
+            precondition(r.diagnostics.commitSucceeded == true && r.diagnostics.completed)
+        }
+        check("accepted size with delayed AX readback is not immediately restored") { r in
+            r.send(.leftMouseDown); r.run(); r.moveTop(); r.run()
+            r.window.afterSize = { r.window.frame.size = CGSize(width: 400, height: 300); r.window.afterSize = nil }
+            r.send(.leftMouseUp, 300, 44); r.runOne(); r.runOne()
+            precondition(r.window.writes == ["size"] && r.diagnostics.commitSucceeded == nil)
+            r.window.frame.size = CGSize(width: 1000, height: 776)
+            r.run()
+            precondition(r.window.writes == ["size", "position"] && r.diagnostics.commitSucceeded == true)
+        }
+        check("new drag cancels verification retry after a rollback") { r in
+            r.send(.leftMouseDown); r.run(); r.moveTop(); r.run(); r.send(.leftMouseUp, 300, 44)
+            r.runOne(); r.runOne()
+            r.window.frame = CGRect(x: 200, y: 24, width: 400, height: 300)
+            r.send(.leftMouseDown); r.run()
+            precondition(r.window.writes == ["size", "position"])
+        }
+        check("new drag cancels delayed application before any write") { r in
+            r.send(.leftMouseDown); r.run(); r.moveTop(); r.run(); r.send(.leftMouseUp, 300, 44)
+            r.runOne(); r.send(.leftMouseDown); r.run()
+            precondition(r.window.writes.isEmpty)
+        }
         check("release before lookup without movement cannot snap") { r in
             r.send(.leftMouseDown); r.send(.leftMouseUp, 300, 24); r.run()
             precondition(r.window.writes.isEmpty && r.diagnostics.completed)

@@ -19,7 +19,7 @@ struct ApplicationGroupsView: View {
                     })) {
                         ForEach(model.configuration.applicationGroups) { group in
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(group.displayName).fontWeight(.medium)
+                                HStack(spacing: 7) { ApplicationGroupIcons(group: group); Text(group.displayName).fontWeight(.medium) }
                                 Text("\(group.applications.count) apps · \(model.groupUseCount(group.id)) gestures")
                                     .font(.caption).foregroundStyle(Theme.secondary)
                             }.padding(.vertical, 6).tag(group.id)
@@ -65,7 +65,13 @@ private struct ApplicationGroupEditor: View {
                 Button("Add Apps…") { model.chooseApplications(for: group.id) }
                 Menu("Add Running App") {
                     ForEach(model.runningApplications) { app in
-                        Button(app.name) { model.addApplication(app, to: group.id) }
+                        Button { model.addApplication(app, to: group.id) } label: {
+                            Label { Text(app.name) } icon: {
+                                if let icon = ApplicationIconCache.shared.image(for: app.bundleIdentifier) {
+                                    Image(nsImage: icon)
+                                } else { Image(systemName: "app.dashed") }
+                            }
+                        }
                             .disabled(group.applications.contains { $0.id == app.id })
                     }
                 }.fixedSize()
@@ -111,16 +117,58 @@ private struct ApplicationGroupEditor: View {
     }
 }
 
-private struct ApplicationIcon: View {
+struct ApplicationIcon: View {
     let bundleIdentifier: String
+    var size: CGFloat = 30
     var body: some View {
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 30, height: 30)
+        if let icon = ApplicationIconCache.shared.image(for: bundleIdentifier) {
+            Image(nsImage: icon).resizable().frame(width: size, height: size)
                 .accessibilityHidden(true)
         } else {
-            Image(systemName: "app.dashed").font(.system(size: 24)).frame(width: 30, height: 30)
+            Image(systemName: "app.dashed").font(.system(size: size * 0.8)).frame(width: size, height: size)
                 .foregroundStyle(Theme.secondary).help("Not installed on this Mac")
                 .accessibilityLabel("Not installed")
         }
     }
+}
+
+struct ApplicationGroupIcons: View {
+    let group: ApplicationGroup
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(group.applications.prefix(3))) { app in
+                ApplicationIcon(bundleIdentifier: app.bundleIdentifier, size: 16)
+            }
+        }.accessibilityHidden(true)
+    }
+}
+
+/// Cache misses as well as icons so unavailable apps never repeat Launch Services
+/// lookups during gesture feedback updates. Workspace changes clear the bounded cache.
+private final class ApplicationIconCache {
+    static let shared = ApplicationIconCache()
+    private final class Entry: NSObject {
+        let image: NSImage?
+        init(_ image: NSImage?) { self.image = image }
+    }
+    private let cache = NSCache<NSString, Entry>()
+    private var observers: [NSObjectProtocol] = []
+    private init() {
+        cache.countLimit = 256
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification, NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.cache.removeAllObjects() })
+        }
+    }
+    func image(for bundleIdentifier: String) -> NSImage? {
+        let key = bundleIdentifier as NSString
+        if let entry = cache.object(forKey: key) { return entry.image }
+        let runningIcon = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first?.icon
+        let image = runningIcon ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier).map {
+            NSWorkspace.shared.icon(forFile: $0.path)
+        }
+        cache.setObject(Entry(image), forKey: key)
+        return image
+    }
+    deinit { for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) } }
 }

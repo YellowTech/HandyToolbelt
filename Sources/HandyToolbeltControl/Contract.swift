@@ -416,7 +416,8 @@ public enum ControlContract {
                 "layout": enumeration(WindowLayout.allCases.map(\.rawValue)),
                 "showsPreviews": boolean,
                 "snappingEnabled": .object(["type": .string("boolean"), "description": .string("Legacy import field. Used only when top-level snappingModuleEnabled is absent, and only if this Switcher was enabled. New configurations must use snappingModuleEnabled; exports omit this field.")]),
-                "previewScale": number(min: 0.75, max: 1.5)
+                "previewScale": number(min: 0.75, max: 1.5),
+                "gridScale": number(min: 0.75, max: 1.5)
             ], required: ["isEnabled", "shortcut", "currentAppOnly", "includeMinimized", "includeHidden"]),
             "LoginStatus": object([
                 "status": enumeration(["notRegistered", "enabled", "requiresApproval", "notFound"]),

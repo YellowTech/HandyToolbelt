@@ -20,7 +20,7 @@ final class WindowSwitcherPanel: NSPanel {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
         if let area = screen?.visibleFrame, let model {
-            let size = WindowChooserGeometry.size(available: area.size, layout: model.settings.layout, previews: model.settings.showsPreviews, previewScale: model.settings.previewScale)
+            let size = WindowChooserGeometry.size(available: area.size, layout: model.settings.layout, previews: model.settings.showsPreviews, previewScale: model.settings.previewScale, gridScale: model.settings.gridScale)
             model.updateChooserWidth(size.width)
             setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height), display: false)
         }
@@ -156,8 +156,11 @@ struct WindowChooserContent: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(grid ? 2 : 1)
                 .frame(height: grid ? 34 : nil, alignment: .topLeading)
-            Text(item.appName + (item.isMinimized ? " · Minimized" : "") + (item.isHidden ? " · Hidden" : ""))
+            HStack(spacing: 5) {
+                if settings.showsPreviews { appIcon(item).frame(width: 16, height: 16) }
+                Text(item.appName + (item.isMinimized ? " · Minimized" : "") + (item.isHidden ? " · Hidden" : ""))
                 .font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
+            }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 

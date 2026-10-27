@@ -175,7 +175,7 @@ final class ContractTests: XCTestCase {
         let tuningSchema = ControlContract.definitions["Tuning"]!.objectValue!
         XCTAssertEqual(tuningKeys, Set(GestureTuning.bounds.keys))
         XCTAssertEqual(tuningKeys, Set(tuningSchema["properties"]!.objectValue!.keys))
-        XCTAssertEqual(tuningKeys.subtracting(["longTouchDuration", "doubleTapInterval"]), Set(tuningSchema["required"]!.arrayValue!.compactMap(\.stringValue)))
+        XCTAssertEqual(tuningKeys.subtracting(["longTouchDuration", "doubleTapInterval", "tipMaxSeparation", "tipEdgeDeadzone"]), Set(tuningSchema["required"]!.arrayValue!.compactMap(\.stringValue)))
         for (key, bounds) in GestureTuning.bounds {
             let exported = ControlContract.definitions["Tuning"]!.objectValue!["properties"]!.objectValue![key]!.objectValue!
             XCTAssertEqual(exported["minimum"], .number(bounds.lowerBound))
