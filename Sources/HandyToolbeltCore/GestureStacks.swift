@@ -44,17 +44,20 @@ public struct GestureStackAction: Codable, Equatable, Identifiable, Sendable {
     }
 }
 public struct GestureStackBinding: Codable, Equatable, Identifiable, Sendable {
+    public var name: String
+    public var displayName: String { let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines); return trimmed.isEmpty ? gesture.title : trimmed }
     public var id: UUID
     public var gesture: GestureSpec
     public var keyboardModifiers: KeyboardModifierRequirement
     public var actions: [GestureAction]
     public var isEnabled: Bool
-    public init(id: UUID = UUID(), gesture: GestureSpec = .init(kind: .tap, fingers: 1), keyboardModifiers: KeyboardModifierRequirement = .any, actions: [GestureAction] = [], isEnabled: Bool = true) {
-        self.id = id; self.gesture = gesture; self.keyboardModifiers = keyboardModifiers; self.actions = actions; self.isEnabled = isEnabled
+    public init(id: UUID = UUID(), name: String = "", gesture: GestureSpec = .init(kind: .tap, fingers: 1), keyboardModifiers: KeyboardModifierRequirement = .any, actions: [GestureAction] = [], isEnabled: Bool = true) {
+        self.id = id; self.name = name; self.gesture = gesture; self.keyboardModifiers = keyboardModifiers; self.actions = actions; self.isEnabled = isEnabled
     }
-    private enum CodingKeys: String, CodingKey { case id, gesture, keyboardModifiers, actions, isEnabled }
+    private enum CodingKeys: String, CodingKey { case id, name, gesture, keyboardModifiers, actions, isEnabled }
     public init(from decoder: Decoder) throws {
         let v = try decoder.container(keyedBy: CodingKeys.self)
+        name = try v.decodeIfPresent(String.self, forKey: .name) ?? ""
         id = try v.decode(UUID.self, forKey: .id); gesture = try v.decode(GestureSpec.self, forKey: .gesture)
         keyboardModifiers = try v.decodeIfPresent(KeyboardModifierRequirement.self, forKey: .keyboardModifiers) ?? .any
         actions = try v.decode([GestureAction].self, forKey: .actions); isEnabled = try v.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true

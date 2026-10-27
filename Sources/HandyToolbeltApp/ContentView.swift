@@ -62,9 +62,20 @@ struct ContentView: View {
                         .id(id)
                     } else if let id = model.selectedStackID,
                               let stack = model.configuration.stacks.first(where: { $0.id == id }) {
-                        GestureStackEditor(model: model, stack: Binding(get: {
-                            model.configuration.stacks.first(where: { $0.id == id }) ?? stack
-                        }, set: model.updateStack)).id(id)
+                        if let childID = model.selectedStackChildID,
+                           let child = stack.bindings.first(where: { $0.id == childID }) {
+                            StackChildEditor(model: model, stack: stack, child: Binding(get: {
+                                model.configuration.stacks.first(where: { $0.id == id })?.bindings.first(where: { $0.id == childID }) ?? child
+                            }, set: { updated in
+                                guard var current = model.configuration.stacks.first(where: { $0.id == id }),
+                                      let index = current.bindings.firstIndex(where: { $0.id == childID }) else { return }
+                                current.bindings[index] = updated; model.updateStack(current)
+                            }), remove: { model.removeStackChild(childID, from: id) }).id(childID)
+                        } else {
+                            GestureStackEditor(model: model, stack: Binding(get: {
+                                model.configuration.stacks.first(where: { $0.id == id }) ?? stack
+                            }, set: model.updateStack)).id(id)
+                        }
                     } else {
                         ContentUnavailableView {
                             Label("Select a gesture", systemImage: "hand.tap")
@@ -87,18 +98,16 @@ struct ContentView: View {
         let configuration = model.configuration
         let selectedID = model.selectedID
         let selectedStackID = model.selectedStackID
-        let selection = selectedID ?? selectedStackID
+        let selectedChildID = model.selectedStackChildID
+        let expandedStackIDs = model.expandedStackIDs
+        let selection = model.sidebarSelection
         return VStack(alignment: .leading, spacing: 0) {
             Text("Saved mappings").font(.headline).padding(.horizontal, 16).padding(.top, 18).padding(.bottom, 10)
             HStack(spacing: 6) {
                 Circle().fill(model.devices.contains(where: { $0.kind == model.selectedDevice }) ? Theme.accent : .secondary).frame(width: 6, height: 6)
                 Text(model.deviceSummary).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
             }.padding(.horizontal, 17).padding(.bottom, 14)
-            List(selection: Binding<UUID?>(get: { selection }, set: { id in
-                guard id != (model.selectedID ?? model.selectedStackID) else { return }
-                if model.configuration.stacks.contains(where: { $0.id == id }) { model.selectedStackID = id; model.selectedID = nil }
-                else { model.selectedID = id; model.selectedStackID = nil }
-            })) {
+            List(selection: Binding<MappingSidebarSelection?>(get: { selection }, set: { model.sidebarSelection = $0 })) {
                 ForEach(model.mappingScopeIDs, id: \.self) { scopeID in
                     ForEach(bindings.filter { $0.applicationGroupID == scopeID }) { binding in
                         HStack(alignment: .center, spacing: 12) {
@@ -121,15 +130,24 @@ struct ContentView: View {
                             } else if !binding.isEnabled {
                                 Image(systemName: "pause.circle").foregroundStyle(Theme.secondary).help("Mapping disabled")
                             }
-                        }.padding(.vertical, 6).tag(binding.id)
+                        }.padding(.vertical, 6).tag(MappingSidebarSelection.binding(binding.id))
                         .graphiteSelection(selectedID == binding.id)
                         .contextMenu { Button("Delete Gesture", role: .destructive) { model.removeBinding(binding.id) } }
                     }
                     ForEach(stacks.filter { $0.applicationGroupID == scopeID }) { stack in
                         HStack(spacing: 12) {
-                            Image(systemName: "square.stack").frame(width: 22)
+                            Button { model.setStackExpanded(!expandedStackIDs.contains(stack.id), id: stack.id) } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: expandedStackIDs.contains(stack.id) ? "chevron.down" : "chevron.right").font(.caption).frame(width: 12)
+                                    Image(systemName: expandedStackIDs.contains(stack.id) ? "folder.fill" : "folder").frame(width: 22)
+                                }
+                                .frame(width: 46, height: 44)
+                                .contentShape(Rectangle())
+                            }.buttonStyle(.borderless)
+                                .accessibilityLabel(expandedStackIDs.contains(stack.id) ? "Collapse \(stack.name)" : "Expand \(stack.name)")
+                                .accessibilityValue(expandedStackIDs.contains(stack.id) ? "Expanded" : "Collapsed")
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(stack.name).fontWeight(.medium)
+                                Text(stack.name).fontWeight(.medium).lineLimit(2)
                                 HStack(spacing: 5) {
                                     if let id = stack.applicationGroupID, let group = configuration.applicationGroups.first(where: { $0.id == id }) { ApplicationGroupIcons(group: group) }
                                     Text("\(stack.corner.title) · \(configuration.scopeTitle(for: stack))").font(.caption).foregroundStyle(Theme.secondary)
@@ -138,8 +156,31 @@ struct ContentView: View {
                             Spacer(minLength: 0)
                             if stack.isEnabled && (!configuration.stackValidationMessages(for: stack).isEmpty || !configuration.conflictMessages(for: stack).isEmpty) { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange) }
                             else if !stack.isEnabled { Image(systemName: "pause.circle").foregroundStyle(Theme.secondary) }
-                        }.padding(.vertical, 6).tag(stack.id).graphiteSelection(selectedStackID == stack.id)
-                        .contextMenu { Button("Delete Stack", role: .destructive) { model.removeStack(stack.id) } }
+                        }.padding(.vertical, 6).tag(MappingSidebarSelection.stack(stack.id)).graphiteSelection(selectedStackID == stack.id && selectedChildID == nil)
+                        .contextMenu {
+                            Button("Add Gesture") { model.addStackChild(stack.id) }
+                                .disabled(stack.bindings.count >= ConfigurationLimits.maximumStackBindings)
+                            Button("Delete Stack", role: .destructive) { model.removeStack(stack.id) }
+                        }
+                        if expandedStackIDs.contains(stack.id) {
+                            ForEach(stack.bindings) { child in
+                                HStack(spacing: 10) {
+                                    GestureGlyph(gesture: child.gesture).frame(width: 32, height: 26)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(child.displayName).fontWeight(.medium).lineLimit(2)
+                                        Text(child.actions.map(\.title).joined(separator: " → ")).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
+                                    }
+                                    Spacer(minLength: 0)
+                                    if !child.isEnabled { Image(systemName: "pause.circle").foregroundStyle(Theme.secondary) }
+                                }.padding(.leading, 26).padding(.vertical, 6).tag(MappingSidebarSelection.child(stack: stack.id, child: child.id))
+                                .graphiteSelection(selectedStackID == stack.id && selectedChildID == child.id)
+                                .contextMenu { Button("Delete Gesture", role: .destructive) { model.removeStackChild(child.id, from: stack.id) } }
+                            }
+                            Button("Add Gesture", systemImage: "plus") { model.addStackChild(stack.id) }
+                                .buttonStyle(.borderless).padding(.leading, 26).padding(.vertical, 4)
+                                .selectionDisabled()
+                                .disabled(stack.bindings.count >= ConfigurationLimits.maximumStackBindings)
+                        }
                     }
                 }
             }.listStyle(.plain).scrollContentBackground(.hidden).background(GraphiteListSelection())
@@ -319,7 +360,7 @@ struct TouchTester: View {
     @State private var howTo = true
     private var example: GestureSpec? {
         if let stack = model.configuration.stacks.first(where: { $0.id == model.selectedStackID }) {
-            var gesture = stack.bindings.first?.gesture ?? GestureSpec(kind: .tap, fingers: 1)
+            var gesture = (stack.bindings.first(where: { $0.id == model.selectedStackChildID }) ?? stack.bindings.first)?.gesture ?? GestureSpec(kind: .tap, fingers: 1)
             gesture.corner = stack.corner
             return gesture
         }

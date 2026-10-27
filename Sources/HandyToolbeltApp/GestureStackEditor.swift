@@ -10,12 +10,14 @@ struct GestureStackEditor: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
-                    TextField("Stack name", text: $stack.name).textFieldStyle(.plain).font(.system(size: 23, weight: .semibold))
+                    TextField("Stack name", text: Binding(get: { stack.name }, set: { stack.name = String($0.prefix(ConfigurationLimits.maximumNameLength)) })).textFieldStyle(.plain).font(.system(size: 23, weight: .semibold))
                     Toggle("Active", isOn: Binding(get: { stack.isEnabled }, set: activate))
                         .toggleStyle(.switch).controlSize(.small).fixedSize()
                     Button(role: .destructive) { confirmingDeletion = true } label: { Image(systemName: "trash") }
                         .buttonStyle(.borderless).help("Delete stack").accessibilityLabel("Delete stack")
                 }
+                Button("Add Gesture", systemImage: "plus") { model.addStackChild(stack.id) }.fixedSize()
+                    .disabled(stack.bindings.count >= ConfigurationLimits.maximumStackBindings)
                 if stack.isEnabled || activationAttempted {
                     ForEach(validationMessages, id: \.self) { message in
                         Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
@@ -71,13 +73,6 @@ struct GestureStackEditor: View {
                     Button("Action") { stack.startActions.append(.init(action: .init())) }
                 }.fixedSize()
                 Divider()
-                HStack { Text("While holding").font(.headline); HelpHint("Use your other fingers. The corner finger is additional: a two-finger tip-tap uses three fingers in total. Normal gesture mappings pause while a stack is active.") }
-                ForEach(stack.bindings.indices, id: \.self) { index in
-                    StackChildEditor(model: model, stack: stack, child: $stack.bindings[index], remove: { stack.bindings.remove(at: index) })
-                    Divider()
-                }
-                Button("Add Gesture", systemImage: "plus") { stack.bindings.append(.init(isEnabled: false)) }
-                Divider()
                 Text("When released").font(.headline)
                 Label("Release all held keys", systemImage: "keyboard").foregroundStyle(Theme.secondary)
                 ActionSequenceEditor(model: model, actions: $stack.releaseActions)
@@ -99,48 +94,66 @@ struct GestureStackEditor: View {
     }
 }
 
-private struct StackChildEditor: View {
+struct StackChildEditor: View {
     @ObservedObject var model: AppModel
     var stack: GestureStack
     @Binding var child: GestureStackBinding
     var remove: () -> Void
     @State private var activationAttempted = false
+    @State private var confirmingDeletion = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(child.gesture.title).fontWeight(.medium)
-                Spacer()
-                Toggle("Active", isOn: Binding(get: { child.isEnabled }, set: { enabled in
-                    if enabled && !activationMessages.isEmpty { activationAttempted = true }
-                    else { activationAttempted = false; child.isEnabled = enabled }
-                })).toggleStyle(.switch).controlSize(.small).fixedSize()
-                Button(role: .destructive, action: remove) { Image(systemName: "minus.circle") }.buttonStyle(.borderless).accessibilityLabel("Remove gesture")
-            }
-            HStack {
-                Picker("Movement", selection: Binding(get: { child.gesture.kind }, set: {
-                    child.gesture.kind = $0; child.gesture = child.gesture.normalized(isStackChild: true)
-                })) { ForEach(GestureKind.allCases) { Text($0.title).tag($0) } }.frame(width: 260)
-                GestureFingerPicker(gesture: $child.gesture, isStackChild: true)
-            }
-            HeaderDisclosureGroup("How to") {
-                GestureHowTo(gesture: example, handAngle: model.configuration.tuning(for: stack.device).handAngleDegrees)
-            }
-            if child.gesture.kind == .forceClick {
-                Text(model.forceClickCapability(for: stack.device).message()).font(.caption).foregroundStyle(Theme.secondary)
-            }
-            KeyboardModifiersEditor(requirement: $child.keyboardModifiers)
-            ActionSequenceEditor(model: model, actions: $child.actions)
-            if activationAttempted {
-                ForEach(activationMessages.filter { !liveStackMessages.contains($0) }, id: \.self) { message in
-                    Text(message).font(.caption).foregroundStyle(.orange)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text(child.displayName).font(.system(size: 23, weight: .semibold)).lineLimit(1)
+                    Spacer()
+                    Toggle("Active", isOn: Binding(get: { child.isEnabled }, set: { enabled in
+                        if enabled && !activationMessages.isEmpty { activationAttempted = true }
+                        else { activationAttempted = false; child.isEnabled = enabled }
+                    })).toggleStyle(.switch).controlSize(.small).fixedSize()
+                    Button(role: .destructive) { confirmingDeletion = true } label: { Image(systemName: "trash") }.buttonStyle(.borderless).accessibilityLabel("Remove gesture")
                 }
-            }
+                HStack {
+                    Text("Name").frame(width: 125, alignment: .leading)
+                    TextField(child.gesture.title, text: Binding(get: { child.name }, set: { child.name = String($0.prefix(ConfigurationLimits.maximumNameLength)) }))
+                        .textFieldStyle(.roundedBorder).accessibilityLabel("Mapping name")
+                }
+                Label("While holding \(stack.name)", systemImage: "folder")
+                    .font(.callout).foregroundStyle(Theme.secondary)
+                Text("\(stack.corner.title) · \(model.configuration.scopeTitle(for: stack))").font(.caption).foregroundStyle(Theme.secondary)
+                Divider()
+                HStack { Text("Gesture").font(.headline); HelpHint("Use your other fingers while holding the folder’s corner. The corner finger is additional. Normal mappings pause while the folder is held.") }
+                HStack {
+                    Text("Movement").frame(width: 125, alignment: .leading)
+                    Picker("Movement", selection: Binding(get: { child.gesture.kind }, set: {
+                        child.gesture.kind = $0; child.gesture = child.gesture.normalized(isStackChild: true)
+                    })) { ForEach(GestureKind.allCases) { Text($0.title).tag($0) } }.labelsHidden().frame(width: 230)
+                    Spacer(minLength: 0)
+                }
+                HStack {
+                    Text(child.gesture.kind.isAnchored && !([GestureKind.tipTapMiddle, .doubleTipTapMiddle].contains(child.gesture.kind)) ? "Resting fingers" : "Fingers")
+                        .frame(width: 125, alignment: .leading)
+                    GestureFingerPicker(gesture: $child.gesture, isStackChild: true).labelsHidden().frame(width: 230)
+                    Spacer(minLength: 0)
+                }
+                if child.gesture.kind == .forceClick {
+                    Text(model.forceClickCapability(for: stack.device).message()).font(.caption).foregroundStyle(Theme.secondary)
+                }
+                KeyboardModifiersEditor(requirement: $child.keyboardModifiers)
+                Divider()
+                Text("Actions").font(.headline)
+                ActionSequenceEditor(model: model, actions: $child.actions)
+                if child.isEnabled || activationAttempted {
+                    ForEach(activationMessages, id: \.self) { message in
+                        Text(message).font(.caption).foregroundStyle(.orange)
+                    }
+                }
+            }.padding(24)
         }
-    }
-    private var example: GestureSpec { var result = child.gesture; result.corner = stack.corner; return result }
-    private var liveStackMessages: [String] {
-        guard stack.isEnabled else { return [] }
-        return model.configuration.stackValidationMessages(for: stack) + model.configuration.conflictMessages(for: stack)
+        .confirmationDialog("Delete this gesture?", isPresented: $confirmingDeletion) {
+            Button("Delete Gesture", role: .destructive, action: remove)
+        }
+        .onDisappear { if model.isRecordingShortcut { model.isRecordingShortcut = false } }
     }
     private var activationMessages: [String] {
         var proposed = stack; proposed.isEnabled = true

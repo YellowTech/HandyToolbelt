@@ -15,6 +15,7 @@ enum TrackpadWorkspace: String, CaseIterable, Identifiable {
 final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration {
         didSet {
+            reconcileStackSelection()
             cancelPendingGestures()
             stackRuntime.end()
             if !configuration.trackpadModuleEnabled { stackKeyboard.stopMonitoring() }
@@ -31,7 +32,7 @@ final class AppModel: ObservableObject {
     @Published var selectedID: UUID? {
         didSet {
             if selectedID != oldValue { cancelPendingGestures() }
-            if selectedID != nil && selectedStackID != nil { selectedStackID = nil }
+            if selectedID != nil { selectedStackChildID = nil; if selectedStackID != nil { selectedStackID = nil } }
             // Evaluate visibility at the selection change. A cached, detached
             // SwiftUI root can otherwise replay onChange after it reappears.
             if selectedID != oldValue, isSelected, showGym, !isCalibrating,
@@ -41,7 +42,49 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var selectedStackID: UUID? { didSet { if selectedStackID != nil && selectedID != nil { selectedID = nil } } }
+    @Published var selectedStackID: UUID? {
+        didSet {
+            if selectedStackID != oldValue { selectedStackChildID = nil }
+            if selectedStackID != nil && selectedID != nil { selectedID = nil }
+        }
+    }
+    @Published var selectedStackChildID: UUID?
+    @Published var expandedStackIDs = Set<UUID>()
+    func selectStackChild(_ childID: UUID, in stackID: UUID) {
+        selectedStackID = stackID; selectedStackChildID = childID
+        expandedStackIDs.insert(stackID)
+    }
+    func setStackExpanded(_ expanded: Bool, id: UUID) {
+        if expanded { expandedStackIDs.insert(id) }
+        else { expandedStackIDs.remove(id); if selectedStackID == id { selectedStackChildID = nil } }
+    }
+    private func reconcileStackSelection() {
+        expandedStackIDs.formIntersection(configuration.stacks.map(\.id))
+        if let id = selectedStackID {
+            guard let stack = configuration.stacks.first(where: { $0.id == id && $0.device == selectedDevice }) else {
+                selectedStackID = nil; selectedStackChildID = nil; return
+            }
+            if let child = selectedStackChildID, !stack.bindings.contains(where: { $0.id == child }) { selectedStackChildID = nil }
+        }
+    }
+    func addStackChild(_ stackID: UUID) {
+        guard let index = configuration.stacks.firstIndex(where: { $0.id == stackID }), configuration.stacks[index].bindings.count < ConfigurationLimits.maximumStackBindings else { return }
+        let stack = configuration.stacks[index]
+        let candidates: [GestureSpec] = GestureKind.allCases.flatMap { kind -> [GestureSpec] in (1...4).map { GestureSpec(kind: kind, fingers: $0).normalized(isStackChild: true) } }
+        let available: GestureSpec? = candidates.first(where: { gesture in
+            (stack.device == .trackpad || gesture.kind != .forceClick) &&
+                gesture.allowedFingerCounts(isStackChild: true).contains(gesture.fingers) &&
+                !stack.bindings.contains { $0.isEnabled && $0.gesture == gesture && $0.keyboardModifiers.overlaps(KeyboardModifierRequirement.any) }
+        })
+        let child = GestureStackBinding(gesture: available ?? .init(kind: .tap, fingers: 1),
+            actions: [.init(kind: .showText, text: "New gesture")], isEnabled: available != nil)
+        configuration.stacks[index].bindings.append(child)
+        selectStackChild(child.id, in: stackID)
+    }
+    func removeStackChild(_ childID: UUID, from stackID: UUID) {
+        guard let index = configuration.stacks.firstIndex(where: { $0.id == stackID }) else { return }
+        configuration.stacks[index].bindings.removeAll { $0.id == childID }
+    }
     @Published private(set) var activeStackName: String?
     private let stackKeyboard: StackKeyboardDriver
     private(set) lazy var stackRuntime: GestureStackRuntime = {
@@ -744,16 +787,19 @@ final class AppModel: ObservableObject {
     func addStack() {
         selectWorkspace(.mappings)
         let stack = GestureStack(device: selectedDevice)
-        configuration.stacks.append(stack); selectedStackID = stack.id
+        configuration.stacks.append(stack); selectedStackID = stack.id; expandedStackIDs.insert(stack.id)
     }
     func updateStack(_ stack: GestureStack) {
         guard let index = configuration.stacks.firstIndex(where: { $0.id == stack.id }) else { return }
         configuration.stacks[index] = stack
     }
     func removeStack(_ id: UUID) {
+        let wasSelected = selectedStackID == id
         configuration.stacks.removeAll { $0.id == id }
-        selectedStackID = visibleStacks.first?.id
-        if selectedStackID == nil { selectedID = visibleBindings.first?.id }
+        if wasSelected {
+            selectedStackID = visibleStacks.first?.id
+            if selectedStackID == nil { selectedID = visibleBindings.first?.id }
+        }
     }
     func addBinding() {
         selectWorkspace(.mappings)
@@ -774,8 +820,12 @@ final class AppModel: ObservableObject {
         selectedID = binding.id
     }
     func removeBinding(_ id: UUID) {
+        let wasSelected = selectedID == id
         configuration.bindings.removeAll { $0.id == id }
-        selectedID = visibleBindings.first?.id
+        if wasSelected {
+            selectedID = visibleBindings.first?.id
+            if selectedID == nil { selectedStackID = visibleStacks.first?.id }
+        }
     }
     func selectDevice(_ device: InputDevice) {
         guard device != selectedDevice else { return }

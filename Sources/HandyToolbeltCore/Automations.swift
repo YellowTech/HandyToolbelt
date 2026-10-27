@@ -85,6 +85,7 @@ public extension AppConfiguration {
             for action in stack.releaseActions { issues += actionErrors(action, label, nested: false) }
             for child in stack.bindings {
                 var childIssues: [String] = []
+                if child.name.count > ConfigurationLimits.maximumNameLength { childIssues.append("\(label): child name exceeds \(ConfigurationLimits.maximumNameLength) characters.") }
                 if stack.device != .trackpad && child.gesture.kind == .forceClick { childIssues.append("\(label): Force click requires a Force Touch trackpad.") }
                 if child.gesture.corner != .none || !child.gesture.allowedFingerCounts(isStackChild: true).contains(child.gesture.fingers) { childIssues.append("\(label): child gestures need 1–4 fingers and no corner; anchored gestures need 2–4 fingers, and middle tip-taps need three.") }
                 if !(1...ConfigurationLimits.maximumStackActions).contains(child.actions.count) { childIssues.append("\(label): child gestures need 1–32 actions.") }

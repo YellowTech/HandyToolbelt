@@ -5,6 +5,17 @@ import HandyToolbeltCore
 @testable import HandyToolbeltCLI
 
 final class ContractTests: XCTestCase {
+    func testOptionalStackChildNameContract() throws {
+        let child = GestureStackBinding(name: "Tabs", actions: [.init(kind: .showText, text: "Tab")])
+        let schema = ControlContract.definitions["GestureStackBinding"]!
+        var value = try JSONValue(encoding: child).objectValue!
+        XCTAssertEqual(JSONShapeValidation.errors(.object(value), schema: schema, root: ControlContract.value), [])
+        value.removeValue(forKey: "name")
+        XCTAssertEqual(JSONShapeValidation.errors(.object(value), schema: schema, root: ControlContract.value), [])
+        XCTAssertEqual(try JSONValue.object(value).decode(GestureStackBinding.self).name, "")
+        value["name"] = .string(String(repeating: "a", count: ConfigurationLimits.maximumNameLength + 1))
+        XCTAssertFalse(JSONShapeValidation.errors(.object(value), schema: schema, root: ControlContract.value).isEmpty)
+    }
     func testSwitcherDiagnosticsContract() {
         let schema = ControlContract.definitions["SwitcherStatus"]!
         var status: JSONObject = ["showing": .bool(false), "loading": .bool(false),

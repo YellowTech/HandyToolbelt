@@ -62,3 +62,18 @@ import Testing
     config.stacks[0].corner = .none
     #expect(config.matchStack(device: .trackpad, corner: .none) == nil)
 }
+
+@Test func stackChildNamesAreOptionalAndBounded() throws {
+    let child = GestureStackBinding(name: "Switch tab", actions: [.init(kind: .showText, text: "Tab")])
+    let encoded = try JSONEncoder().encode(child)
+    #expect(try JSONDecoder().decode(GestureStackBinding.self, from: encoded) == child)
+    var legacy = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    legacy.removeValue(forKey: "name")
+    let decoded = try JSONDecoder().decode(GestureStackBinding.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.name.isEmpty)
+    #expect(decoded.displayName == decoded.gesture.title)
+    var configuration = AppConfiguration(); configuration.bindings = []
+    var oversized = child; oversized.name = String(repeating: "a", count: ConfigurationLimits.maximumNameLength + 1)
+    configuration.stacks = [.init(isEnabled: true, bindings: [oversized])]
+    #expect(!configuration.validation().isValid)
+}

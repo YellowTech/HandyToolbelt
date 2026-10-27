@@ -540,6 +540,47 @@ struct ModelNavigationChecks {
             return (model, ProductivityModel(trackpad: model, display: DisplayModel(presenter: nil, observeSession: false), controlServerEnabled: false), storage)
         }
 
+        let (folderModel, _, _) = try fixture("stack-folders")
+        folderModel.addStack()
+        let folderID = folderModel.selectedStackID!
+        folderModel.addStackChild(folderID)
+        let childID = folderModel.selectedStackChildID!
+        check(folderModel.configuration.stacks.first!.bindings.first!.isEnabled, "New available folder gestures start active with a harmless action")
+        check(folderModel.expandedStackIDs.contains(folderID) && folderModel.selectedID == nil, "Adding a child expands its folder and selects its individual editor")
+        folderModel.setStackExpanded(false, id: folderID)
+        check(folderModel.selectedStackID == folderID && folderModel.selectedStackChildID == nil, "Collapsing a selected child returns to folder configuration")
+        folderModel.selectStackChild(childID, in: folderID)
+        let other = GestureStack(name: "Other")
+        folderModel.configuration.stacks.append(other)
+        folderModel.removeStack(other.id)
+        check(folderModel.selectedStackChildID == childID, "Removing another folder preserves child selection")
+        folderModel.removeStackChild(childID, from: folderID)
+        check(folderModel.selectedStackID == folderID && folderModel.selectedStackChildID == nil, "Deleting the selected child selects its folder")
+        folderModel.addStackChild(folderID)
+        let collision = folderID
+        folderModel.configuration.bindings[0].id = collision
+        folderModel.configuration.stacks[0].bindings[0].id = collision
+        folderModel.sidebarSelection = .binding(collision)
+        check(folderModel.selectedID == collision && folderModel.selectedStackID == nil, "Typed sidebar selects ordinary mapping despite folder and child UUID collision")
+        folderModel.sidebarSelection = .stack(collision)
+        check(folderModel.selectedStackID == collision && folderModel.selectedStackChildID == nil, "Typed sidebar selects folder despite child UUID collision")
+        folderModel.sidebarSelection = .child(stack: collision, child: collision)
+        check(folderModel.selectedID == nil && folderModel.selectedStackChildID == collision && folderModel.sidebarSelection == .child(stack: collision, child: collision), "Typed sidebar retains explicit child parent identity")
+        var remainingBinding = folderModel.configuration.bindings.first!; remainingBinding.id = collision
+        let unselectedBinding = folderModel.configuration.bindings.last!.id
+        folderModel.removeBinding(unselectedBinding)
+        check(folderModel.sidebarSelection == .child(stack: collision, child: collision), "Deleting an ordinary mapping preserves selected folder child")
+        folderModel.configuration.bindings = [remainingBinding]
+        folderModel.sidebarSelection = .binding(collision)
+        folderModel.removeBinding(collision)
+        check(folderModel.sidebarSelection == .stack(folderID), "Deleting final selected ordinary mapping selects remaining folder")
+        var imported = folderModel.configuration; imported.stacks = []
+        try folderModel.replaceConfiguration(imported)
+        check(folderModel.selectedStackID == nil && folderModel.selectedStackChildID == nil && folderModel.expandedStackIDs.isEmpty, "Import removes stale folder selection and expansion")
+        folderModel.addStack(); folderModel.addStackChild(folderModel.selectedStackID!)
+        folderModel.selectDevice(.magicMouse)
+        check(folderModel.selectedStackChildID == nil, "Switching device clears child selection")
+
         let (_, statusHost, _) = try fixture("status-menu")
         checkStatusMenu(statusHost)
         try checkInputSessionLifecycle(directory: directory)

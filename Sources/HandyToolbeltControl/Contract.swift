@@ -385,7 +385,7 @@ public enum ControlContract {
                 "action": ref("Action"), "modifiers": array(enumeration(KeyboardModifier.allCases.map(\.rawValue)), max: 4)
             ], required: ["id", "kind", "action", "modifiers"]),
             "GestureStackBinding": object([
-                "id": uuid, "gesture": ref("Gesture"), "keyboardModifiers": ref("KeyboardModifierRequirement"),
+                "name": string(max: ConfigurationLimits.maximumNameLength), "id": uuid, "gesture": ref("Gesture"), "keyboardModifiers": ref("KeyboardModifierRequirement"),
                 "actions": array(ref("Action"), max: ConfigurationLimits.maximumStackActions), "isEnabled": boolean
             ], required: ["id", "gesture", "actions"]),
             "GestureStack": object([

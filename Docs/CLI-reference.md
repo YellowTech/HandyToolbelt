@@ -1730,6 +1730,10 @@ Successful result:
       },
       "keyboardModifiers" : {
         "$ref" : "#/$defs/KeyboardModifierRequirement"
+      },
+      "name" : {
+        "maxLength" : 120,
+        "type" : "string"
       }
     },
     "required" : [
