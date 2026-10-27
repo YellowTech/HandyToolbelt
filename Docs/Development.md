@@ -1,8 +1,8 @@
 # Development
 
-The app is pure Swift using Apple system frameworks and local storage. Runtime actions do not launch subprocesses. The package uses Swift 5 language mode with a Swift 6 toolchain and macOS 26 SDK or newer; the runtime minimum is macOS 14.
+The app is pure Swift using Apple system frameworks and local storage. Runtime actions do not launch subprocesses. The package uses Swift 5 language mode with a Swift 6 toolchain and macOS 26 SDK or newer; the runtime minimum is macOS 14. Install full Xcode 26 or newer, open it to finish setup, and select it under **Xcode → Settings → Locations → Command Line Tools**. `xcode-select --print-path` should point inside the selected Xcode app; `xcode-select --install` only installs the standalone tools and is not sufficient.
 
-`swift Scripts/build.swift` runs verification, builds release executables for the current architecture, packages `dist/HandyToolbelt.app`, and signs and verifies the CLI and app. Quit any repository copy before rebuilding. This is a development build, not a notarized distribution release.
+`swift Scripts/build.swift` builds release executables for the current architecture, packages `dist/HandyToolbelt.app`, and signs and verifies the CLI and app. Tests are separate: run `swift Scripts/verify.swift` for the test suite and integration checks. Quit any repository copy before rebuilding. This is a development build, not a notarized distribution release.
 
 Signing reuses the ignored `.local-signing-identity` pin, or selects and pins the sole available Apple Development/Mac Developer identity after a successful build. A fresh checkout with no development certificate and no existing repository app automatically uses ad-hoc signing and pins `-`; macOS privacy permissions may need to be granted again after rebuilding. Adding a certificate later does not change that pin. Multiple certificates require an explicit choice. Missing or invalid pinned identities fail without falling back, and an existing repository app prevents automatic ad-hoc selection.
 

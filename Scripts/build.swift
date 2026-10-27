@@ -110,7 +110,6 @@ func build() throws {
             throw BuildFailure("\(URL(fileURLWithPath: executable).lastPathComponent) failed (exit \(task.terminationStatus)). See the command output above.", status: task.terminationStatus > 0 ? task.terminationStatus : 1)
         }
     }
-    try run("/usr/bin/xcrun", ["swift", "Scripts/verify.swift"])
     try run("/usr/bin/xcrun", ["swift", "build", "-c", "release"])
     let pathQuery = Process()
     pathQuery.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")

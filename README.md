@@ -13,7 +13,11 @@ Written entirely in Swift with Apple system frameworks, HandyToolbelt keeps sett
 
 ## Build and run
 
-Requires **macOS 14+** at runtime and **Xcode 26 SDK or newer with Swift 6** to build. Quit the repository's running app before packaging:
+Requires **macOS 14+** to run. To build:
+
+1. Install **Xcode 26 or newer** and open it once to finish setup.
+2. In **Xcode → Settings → Locations → Command Line Tools**, select the installed Xcode version. The standalone Command Line Tools package is not enough.
+3. Quit the repository's running app, then build and launch:
 
 ```sh
 swift Scripts/build.swift
@@ -22,7 +26,7 @@ open dist/HandyToolbelt.app
 
 No developer account is required for local builds. Fresh checkouts without a development certificate use ad-hoc signing; macOS permissions may need to be granted again after rebuilding. See the [build notes](Docs/Development.md).
 
-Run checks without packaging:
+The build does not run tests. Run the test suite and other checks separately:
 
 ```sh
 swift Scripts/verify.swift
