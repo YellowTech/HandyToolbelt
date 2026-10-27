@@ -4,7 +4,7 @@ import Testing
 
 @Test func stackRoundTripAndLegacyDefaults() throws {
     var config = AppConfiguration(); config.bindings = []
-    config.stacks = [.init(name: "Tabs", isEnabled: true, startActions: [.init(kind: .holdModifiers)], bindings: [.init(gesture: .init(kind: .tipTapLeft), actions: [.init(system: .previousTab)])], releaseActions: [.init(kind: .openApplication, applicationBundleIdentifier: "com.apple.finder")])]
+    config.stacks = [.init(name: "Tabs", isEnabled: true, startActions: [.init(kind: .holdModifiers)], bindings: [.init(gesture: .init(kind: .tipTapLeft), actions: [.init(kind: .shortcut, shortcut: SystemAction.previousTab.browserShortcut)])], releaseActions: [.init(kind: .openApplication, applicationBundleIdentifier: "com.apple.finder")])]
     let restored = try JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(config))
     #expect(restored.stacks == config.stacks)
     #expect(restored.validation().isValid)

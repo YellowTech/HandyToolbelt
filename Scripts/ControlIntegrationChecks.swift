@@ -217,7 +217,7 @@ struct ControlIntegrationChecks {
               "Trackpad edit preserves workflows and mouse tuning")
         check(!savedTrackpad.bindings[0].showsToast, "CLI roundtrip preserves per-binding toast opt-out")
         let gesture = trackpad.bindings[0].gesture
-        check(savedTrackpad.match(device: .trackpad, gesture: gesture, frontmostBundleIdentifier: "com.apple.dt.Xcode")?.action.system == .previousTab
+        check(savedTrackpad.match(device: .trackpad, gesture: gesture, frontmostBundleIdentifier: "com.apple.dt.Xcode")?.action == trackpad.bindings[0].action.canonicalized
               && savedTrackpad.match(device: .trackpad, gesture: gesture, frontmostBundleIdentifier: "com.apple.Safari") == nil,
               "CLI-edited scoped gesture matches inside its application group and stays inactive outside")
         let validBytes = try Data(contentsOf: store.url)

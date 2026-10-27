@@ -133,8 +133,17 @@ public struct Shortcut: Codable, Equatable, Sendable {
 }
 
 public enum SystemAction: String, CaseIterable, Codable, Identifiable, Sendable {
+    // Legacy input aliases. Saved actions normalize these to browser key presses.
     case previousTab, nextTab, middleClick, missionControl, showDesktop, spotlight, playPause, mute, volumeDown, volumeUp
     case nextWindow, previousWindow, showWindowSwitcher
+    public static var selectableCases: [Self] { allCases.filter { $0.browserShortcut == nil } }
+    public var browserShortcut: Shortcut? {
+        switch self {
+        case .previousTab: .init(keyCode: 48, modifiers: (1 << 18) | (1 << 17), keyLabel: "⇥")
+        case .nextTab: .init(keyCode: 48, modifiers: 1 << 18, keyLabel: "⇥")
+        default: nil
+        }
+    }
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -169,7 +178,7 @@ public struct GestureAction: Codable, Equatable, Sendable {
     public var automationID: UUID? = nil
     public var kind: ActionKind = .system
     public var shortcut: Shortcut? = nil
-    public var system: SystemAction = .nextTab
+    public var system: SystemAction = .middleClick
     public var script: String = ""
     public var text = ""
     public var textDuration: Double = GestureAction.defaultTextDuration
@@ -190,8 +199,30 @@ public struct GestureAction: Codable, Equatable, Sendable {
         script = try values.decode(String.self, forKey: .script)
         text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
         textDuration = try values.decodeIfPresent(Double.self, forKey: .textDuration) ?? Self.defaultTextDuration
+        self = canonicalized
     }
-    public init(kind: ActionKind = .system, shortcut: Shortcut? = nil, system: SystemAction = .nextTab, script: String = "", text: String = "", textDuration: Double = GestureAction.defaultTextDuration, automationID: UUID? = nil, applicationBundleIdentifier: String = "") {
+    /// Converts retired system aliases while retaining unrelated action fields.
+    public var canonicalized: Self {
+        var result = self
+        if let browserShortcut = system.browserShortcut {
+            if kind == .system { result.kind = .shortcut; result.shortcut = browserShortcut }
+            result.system = .middleClick
+        }
+        return result
+    }
+    public func encode(to encoder: Encoder) throws {
+        let action = canonicalized
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(action.kind, forKey: .kind)
+        try values.encodeIfPresent(action.shortcut, forKey: .shortcut)
+        try values.encode(action.system, forKey: .system)
+        try values.encode(action.script, forKey: .script)
+        try values.encode(action.text, forKey: .text)
+        try values.encode(action.textDuration, forKey: .textDuration)
+        try values.encodeIfPresent(action.automationID, forKey: .automationID)
+        try values.encode(action.applicationBundleIdentifier, forKey: .applicationBundleIdentifier)
+    }
+    public init(kind: ActionKind = .system, shortcut: Shortcut? = nil, system: SystemAction = .middleClick, script: String = "", text: String = "", textDuration: Double = GestureAction.defaultTextDuration, automationID: UUID? = nil, applicationBundleIdentifier: String = "") {
         self.applicationBundleIdentifier = applicationBundleIdentifier
         self.automationID = automationID
         self.kind = kind; self.shortcut = shortcut; self.system = system; self.script = script; self.text = text; self.textDuration = textDuration
@@ -247,8 +278,8 @@ public struct GestureBinding: Codable, Identifiable, Equatable, Sendable {
         keyboardModifiers = try v.decodeIfPresent(KeyboardModifierRequirement.self, forKey: .keyboardModifiers) ?? .any
     }
     public static let starterBindings: [GestureBinding] = [
-        .init(gesture: .init(kind: .tipTapLeft), action: .init(system: .previousTab), applicationGroupID: ApplicationGroup.browsersID),
-        .init(gesture: .init(kind: .tipTapRight), action: .init(system: .nextTab), applicationGroupID: ApplicationGroup.browsersID),
+        .init(gesture: .init(kind: .tipTapLeft), action: .init(kind: .shortcut, shortcut: SystemAction.previousTab.browserShortcut), applicationGroupID: ApplicationGroup.browsersID),
+        .init(gesture: .init(kind: .tipTapRight), action: .init(kind: .shortcut, shortcut: SystemAction.nextTab.browserShortcut), applicationGroupID: ApplicationGroup.browsersID),
         .init(gesture: .init(kind: .tap, fingers: 3), action: .init(system: .middleClick)),
         .init(gesture: .init(kind: .click, fingers: 4), action: .init(system: .missionControl))
     ]

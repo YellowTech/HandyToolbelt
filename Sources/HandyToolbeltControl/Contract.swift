@@ -299,7 +299,7 @@ public enum ControlContract {
                 "kind": enumeration(ActionKind.allCases.map(\.rawValue)),
                 "script": string(max: GestureAction.maximumScriptLength),
                 "shortcut": ref("Shortcut"),
-                "system": enumeration(SystemAction.allCases.map(\.rawValue)),
+                "system": extending(enumeration(SystemAction.allCases.map(\.rawValue)), ["description": .string("previousTab and nextTab are legacy input aliases, normalized to shortcut actions using Control–Shift–Tab and Control–Tab. Current System choices exclude these aliases; canonical output uses middleClick for their inactive system field.")]),
                 "text": string(max: GestureAction.maximumTextLength),
                 "textDuration": displayDuration()
             ], required: ["kind", "system", "script"]),

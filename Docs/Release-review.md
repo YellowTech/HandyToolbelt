@@ -1,5 +1,11 @@
 # HandyToolbelt release review
 
+## Browser shortcut cleanup — 0.28.1 (62), 2026-10-27
+
+Previous/next browser tab now use ordinary Key press actions (Control–Shift–Tab / Control–Tab). The duplicate System choices are removed. Legacy settings and CLI inputs migrate across mappings, stacks, and automations; exports use the canonical shortcut form.
+
+Unit and contract tests, 181 CLI integration checks, 400/401 model checks, 58 stack checks, 53 transfer checks, and release compilation passed. The signed candidate is staged at `.build/browser-shortcut-release/HandyToolbelt.app`; the running 0.28.0 app was not replaced.
+
 ## Tester feedback — 0.28.0 (61), 2026-10-27
 
 Three Sol implementation agents handled gestures, window behavior, and settings UI, followed by primary-agent integration and review. Review caught missing production stack wiring for double tip-taps, a dropped single when a different second tip began, repeated icon lookups, and an obsolete snapping commit path; these were corrected.

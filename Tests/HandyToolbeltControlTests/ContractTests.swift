@@ -196,3 +196,18 @@ final class ContractTests: XCTestCase {
     }
 
 }
+
+extension ContractTests {
+    func testLegacyBrowserSystemAliasesRemainValidInputAndExportCanonically() throws {
+        let schema = try XCTUnwrap(ControlContract.definitions["Action"])
+        for alias in ["previousTab", "nextTab"] {
+            let raw: JSONValue = .object(["kind": .string("system"), "system": .string(alias), "script": .string("")])
+            XCTAssertEqual(JSONShapeValidation.errors(raw, schema: schema, root: ControlContract.value), [])
+            let action = try raw.decode(GestureAction.self)
+            XCTAssertEqual(action.kind, .shortcut)
+            let output = try JSONValue(encoding: action)
+            XCTAssertEqual(output.objectValue?["system"], .string("middleClick"))
+            XCTAssertEqual(JSONShapeValidation.errors(output, schema: schema, root: ControlContract.value), [])
+        }
+    }
+}

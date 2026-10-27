@@ -1179,6 +1179,7 @@ Successful result:
         "$ref" : "#/$defs/Shortcut"
       },
       "system" : {
+        "description" : "previousTab and nextTab are legacy input aliases, normalized to shortcut actions using Control–Shift–Tab and Control–Tab. Current System choices exclude these aliases; canonical output uses middleClick for their inactive system field.",
         "enum" : [
           "previousTab",
           "nextTab",

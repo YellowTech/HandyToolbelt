@@ -13,7 +13,8 @@ private func mapping(group: UUID? = nil, action: SystemAction = .mute, enabled: 
 @Test func browserExamplesOnlyMatchTheFocusedBrowser() throws {
     let config = AppConfiguration()
     let result = try #require(config.match(device: .trackpad, gesture: gesture, frontmostBundleIdentifier: safari))
-    #expect(result.action.system == .previousTab)
+    #expect(result.action.kind == .shortcut)
+    #expect(result.action.shortcut == SystemAction.previousTab.browserShortcut)
     #expect(config.match(device: .trackpad, gesture: gesture, frontmostBundleIdentifier: terminal) == nil)
     #expect(config.match(device: .trackpad, gesture: gesture) == nil)
     #expect(config.match(device: .magicMouse, gesture: gesture, frontmostBundleIdentifier: safari) == nil)

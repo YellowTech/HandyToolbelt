@@ -66,13 +66,16 @@ struct GestureActionEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if showsTypePicker {
-                Picker("Action type", selection: $action.kind) {
+                Picker("Action type", selection: Binding(get: { action.kind }, set: { kind in
+                    action = action.canonicalized
+                    action.kind = kind
+                })) {
                     ForEach(ActionKind.allCases) { kind in Text(kind.title).tag(kind) }
                 }.frame(maxWidth: 310)
             }
             switch action.kind {
             case .system:
-                Picker("Do this", selection: $action.system) { ForEach(SystemAction.allCases) { Text($0.title).tag($0) } }
+                Picker("Do this", selection: $action.system) { ForEach(SystemAction.selectableCases) { Text($0.title).tag($0) } }
             case .shortcut:
                 ShortcutRecorder(shortcut: $action.shortcut, isRecording: $isRecording).frame(height: 38)
             case .showText:

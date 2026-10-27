@@ -12,6 +12,7 @@ final class ActionExecutor {
     private let scriptQueue = DispatchQueue(label: "HandyToolbelt.AppleScript", qos: .userInitiated)
 
     func execute(_ action: GestureAction, completion: @escaping (Result<String, Error>) -> Void) {
+        let action = action.canonicalized
         if action.kind == .showText {
             guard action.isValid, let onShowText else { completion(.failure(ActionError.message("Enter text first."))); return }
             onShowText(action); completion(.success(action.title)); return
@@ -78,10 +79,9 @@ final class ActionExecutor {
     }
 
     private func system(_ action: SystemAction) {
-        let control: UInt64 = 1 << 18, shift: UInt64 = 1 << 17, command: UInt64 = 1 << 20
+        let control: UInt64 = 1 << 18, command: UInt64 = 1 << 20
         switch action {
-        case .previousTab: send(.init(keyCode: 48, modifiers: control | shift, keyLabel: "⇥"))
-        case .nextTab: send(.init(keyCode: 48, modifiers: control, keyLabel: "⇥"))
+        case .previousTab, .nextTab: break // Canonicalized to Key press before dispatch.
         case .missionControl: send(.init(keyCode: 126, modifiers: control, keyLabel: "↑"))
         case .showDesktop: send(.init(keyCode: 103, modifiers: 0, keyLabel: "F11"))
         case .spotlight: send(.init(keyCode: 49, modifiers: command, keyLabel: "Space"))
