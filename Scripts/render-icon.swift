@@ -7,7 +7,7 @@ let fm = FileManager.default
 let arguments = CommandLine.arguments.dropFirst()
 let output = arguments.first(where: { $0 != "--preview" }).map { URL(fileURLWithPath: $0) }
     ?? root.appendingPathComponent(".build/AppIcon.icns")
-guard let glyph = NSImage(contentsOf: root.appendingPathComponent("Sources/SuperTrackpad/Resources/Toolbelt.pdf")) else {
+guard let glyph = NSImage(contentsOf: root.appendingPathComponent("Sources/HandyToolbeltApp/Resources/Toolbelt.pdf")) else {
     fatalError("Missing Toolbelt.pdf")
 }
 let graphite = NSColor(srgbRed: 48/255, green: 47/255, blue: 43/255, alpha: 1)

@@ -1,7 +1,7 @@
 // Development-only rendered native workspace and module benchmark. Never starts the host or global inputs.
 import AppKit
 import SwiftUI
-import SuperTrackpadCore
+import HandyToolbeltCore
 @main struct GymTransitionChecks {
  @MainActor static func main() {
  setbuf(stdout, nil)

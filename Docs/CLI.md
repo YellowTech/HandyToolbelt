@@ -1,6 +1,6 @@
 # HandyToolbelt CLI
 
-The signed app includes `Contents/MacOS/handytoolbelt`, with `supertools` retained as a compatibility alias. Run that executable by its full path, or create your own shell alias. Keep the alias pointing into the app bundle so app updates also update the CLI; a separately copied executable can become outdated. HandyToolbelt does not edit PATH or shell configuration. Open the app and enable Allow CLI control before calling the CLI; the CLI never launches it automatically. The running app's `schema` is authoritative.
+The signed app includes `Contents/MacOS/handytoolbelt`. Run that executable by its full path, or create your own shell alias. Keep the alias pointing into the app bundle so app updates also update the CLI; a separately copied executable can become outdated. HandyToolbelt does not edit PATH or shell configuration. Open the app and enable Allow CLI control before calling the CLI; the CLI never launches it automatically. The running app's `schema` is authoritative.
 
 ```sh
 /path/to/HandyToolbelt.app/Contents/MacOS/handytoolbelt --help
@@ -84,7 +84,7 @@ The input must be a JSON object. Choose at most one of `--json`, `--file`, or `-
 
 ## Local connection
 
-The app listens only on the Unix-domain socket `/tmp/supertools-<uid>/control.sock`. Its directory is private to the current user (0700), its socket is 0600, and both sides verify ownership and same-user peer credentials. There is no TCP or HTTP listener. Each connection carries one bounded newline-delimited JSON request and response (up to 1 MiB each), with finite timeouts and at most eight concurrent clients.
+The app listens only on the Unix-domain socket `/tmp/handytoolbelt-<uid>/control.sock`. Its directory is private to the current user (0700), its socket is 0600, and both sides verify ownership and same-user peer credentials. There is no TCP or HTTP listener. Each connection carries one bounded newline-delimited JSON request and response (up to 1 MiB each), with finite timeouts and at most eight concurrent clients.
 
 For isolated tests, use `handytoolbelt --socket /private/test-directory/control.sock status`. The override must point into a private directory owned by your user. A missing app or socket produces an actionable error rather than starting the app. The server only removes a stale socket after a definite refused connection and matching filesystem identity; it rejects unsafe files and symlinks.
 
@@ -102,7 +102,7 @@ Provide either or both Boolean properties; omitted modes retain their selection.
 
 Run `swift Scripts/verify.swift` for sequential unit tests, model checks, and isolated real CLI integration checks. The integration harness uses temporary configuration and a private socket with fake native actions and power assertions. Normal packaging runs this verification before its release build.
 
-The command enum and its exhaustive specifications in `SuperToolsControl/Contract.swift` own input/result shapes, descriptions, and examples. The app dispatches that enum exhaustively. Core owns gesture/action enums and tuning limits shared by the UI and contract. The validator implements a deliberately small schema subset; contract tests reject unsupported keywords and unresolved references. Configuration reference checks and conflicts remain server semantic validation.
+The command enum and its exhaustive specifications in `HandyToolbeltControl/Contract.swift` own input/result shapes, descriptions, and examples. The app dispatches that enum exhaustively. Core owns gesture/action enums and tuning limits shared by the UI and contract. The validator implements a deliberately small schema subset; contract tests reject unsupported keywords and unresolved references. Configuration reference checks and conflicts remain server semantic validation.
 
 After intentional contract changes, run `swift Scripts/verify.swift --generate-docs`, review `Docs/CLI-reference.md`, then run normal verification. Tests check generated reference drift, metadata, offline help, examples, and actual handler results for every command.
 

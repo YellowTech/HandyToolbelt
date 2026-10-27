@@ -1,6 +1,8 @@
 # HandyToolbelt security and threat review
 
-Reviewed 2026-10-26 at source commit `7acea68`, with a clean starting working tree. The inspected packaged app was version 0.26.7 (59). The original review and probes did not change runtime behavior. Historical source locations below refer to that commit.
+Paths and commands below use current names for navigation; historical checks do not validate the current renamed build.
+
+Reviewed 2026-10-26 at source commit `7acea68`, with a clean starting working tree. The inspected packaged app was version 0.26.7 (59). The original review and probes did not change runtime behavior. Historical line references below describe that commit; displayed paths use the current layout.
 
 ## Follow-up: CLI opt-in, 2026-10-27
 
@@ -33,19 +35,19 @@ At the reviewed commit, the most important boundary was the always-enabled local
 
 ### 1. High priority: local control can turn another process's instructions into app-authorized actions
 
-**Evidence:** `Sources/SuperToolsControl/Transport.swift:131` authenticates the peer's UID only. `Sources/SuperTrackpad/Host/ProductivityModel.swift:96` defaults the server to enabled and starts it at line 136. `Sources/SuperTrackpad/ControlCommandService.swift:117` applies supplied configuration, and line 161 starts a named automation. Neither operation has a separate user-approval or executable-content trust check. The revision returned by `config.get` prevents stale writes; it is not authorization.
+**Evidence:** `Sources/HandyToolbeltControl/Transport.swift:131` authenticates the peer's UID only. `Sources/HandyToolbeltApp/Host/ProductivityModel.swift:96` defaults the server to enabled and starts it at line 136. `Sources/HandyToolbeltApp/ControlCommandService.swift:117` applies supplied configuration, and line 161 starts a named automation. Neither operation has a separate user-approval or executable-content trust check. The revision returned by `config.get` prevents stale writes; it is not authorization.
 
-An isolated generic Python process successfully performed `config.get` → `config.apply` → `automations.run` against the production server/service implementations. The added AppleScript action reached a recording-only executor and persisted to temporary settings. No bundled CLI, token, or app approval was required. Production dispatch leads to native key posting or `NSAppleScript` in `Sources/SuperTrackpad/ActionExecutor.swift:38` and line 49.
+An isolated generic Python process successfully performed `config.get` → `config.apply` → `automations.run` against the production server/service implementations. The added AppleScript action reached a recording-only executor and persisted to temporary settings. No bundled CLI, token, or app approval was required. Production dispatch leads to native key posting or `NSAppleScript` in `Sources/HandyToolbeltApp/ActionExecutor.swift:38` and line 49.
 
 **Impact and prerequisites:** A malicious or compromised unsandboxed local program can ask the already-authorized app to perform input/actions on its behalf. This requires a local foothold and the app's relevant grants; it is not unauthenticated internet execution or proof of an OS TCC bypass. The protocol intentionally supports scripts and AI agents, so the question is whether all same-user callers should inherit that trust automatically.
 
 **Recommended boundary:** Make powerful CLI control an explicit opt-in. For a stronger boundary, require in-app approval for newly supplied or changed executable behavior and restrict unattended runs to approved definitions. Include shortcuts and referenced automations in that policy, not just AppleScript text. Keep safe status/overlay capabilities separately configurable. Authenticating only the bundled CLI is insufficient if any process can launch it; a token in a same-user-readable file also does not solve this threat.
 
-Apply the same trust policy to persisted configuration. `Sources/SuperTrackpad/ConfigurationStore.swift:13` decodes local settings directly, and `Sources/SuperTrackpad/AppModel.swift:248` adopts them at startup. A portable `trusted: true` field or editable approval list beside the JSON would let a file writer approve its own changes. Any protected trust record must be separate from imported settings and resistant to the particular same-user caller threat being addressed.
+Apply the same trust policy to persisted configuration. `Sources/HandyToolbeltApp/ConfigurationStore.swift:13` decodes local settings directly, and `Sources/HandyToolbeltApp/AppModel.swift:248` adopts them at startup. A portable `trusted: true` field or editable approval list beside the JSON would let a file writer approve its own changes. Any protected trust record must be separate from imported settings and resistant to the particular same-user caller threat being addressed.
 
 ### 2. Medium priority: imports install executable behavior, despite safe parsing
 
-**Evidence:** `Sources/SuperTrackpad/SettingsTransferView.swift:71` counts AppleScript definitions and correctly explains that later use can execute actions. Line 78 offers a collapsed preview of the complete JSON. `Sources/SuperTrackpad/SettingsTransferModel.swift:127` applies the reviewed configuration while retaining its enabled mappings and scripts. The `authorize` callback checks permission requirements for enabling modules, not trust in script contents.
+**Evidence:** `Sources/HandyToolbeltApp/SettingsTransferView.swift:71` counts AppleScript definitions and correctly explains that later use can execute actions. Line 78 offers a collapsed preview of the complete JSON. `Sources/HandyToolbeltApp/SettingsTransferModel.swift:127` applies the reviewed configuration while retaining its enabled mappings and scripts. The `authorize` callback checks permission requirements for enabling modules, not trust in script contents.
 
 This is a social-engineering/design risk, not an identified JSON parser exploit or automatic execution on file selection. A person importing a useful gesture preset may approve it without recognizing a hostile action nested in a stack or automation. Existing macOS grants do not constitute approval of each new script.
 
@@ -55,7 +57,7 @@ This is a social-engineering/design risk, not an identified JSON parser exploit 
 
 ### 3. Medium priority: stack cleanup also dispatches arbitrary release actions after suspension
 
-**Evidence:** `Sources/SuperTrackpad/AppModel.swift:519` marks the input session unavailable for lock/sleep and calls `suspendInputMonitoring`. That method calls `stackRuntime.end()` at line 539. `Sources/SuperTrackpad/GestureStackRuntime.swift:253` always starts the configured release sequence, and line 259 advances subsequent actions without a session or cancellation-generation check. The AppModel executor closure at line 51 forwards actions without checking session availability. `stop()` also shares this ending path.
+**Evidence:** `Sources/HandyToolbeltApp/AppModel.swift:519` marks the input session unavailable for lock/sleep and calls `suspendInputMonitoring`. That method calls `stackRuntime.end()` at line 539. `Sources/HandyToolbeltApp/GestureStackRuntime.swift:253` always starts the configured release sequence, and line 259 advances subsequent actions without a session or cancellation-generation check. The AppModel executor closure at line 51 forwards actions without checking session availability. `stop()` also shares this ending path.
 
 Automatic key release is necessary. However, the release sequence may contain AppleScript, key presses, or application launches. It can start new actions as the app suspends, or continue from an asynchronous callback after the module stops. The existing product specification explicitly describes release actions on every ending; this is a security policy concern in that intended behavior, not an accidental regression claim. Action-specific macOS/module checks may still reject particular effects.
 
@@ -92,7 +94,7 @@ Local startup loading also lacks the import path's size limit and semantic valid
 
 ## Validation and limits
 
-- `swift test --filter SuperToolsControlTests`: 20 tests passed.
+- `swift test --filter HandyToolbeltControlTests`: 20 tests passed.
 - `swift Scripts/check-settings-transfer.swift`: 53 checks passed.
 - `swift Scripts/check-control-integration.swift`: 152/152 checks passed.
 - Isolated generic-client/configuration probe: 3/3 assertions passed, demonstrating the current trust boundary.

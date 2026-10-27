@@ -1,7 +1,7 @@
 // OS boundaries only: the monitor, chooser selection, stack keyboard driver and
 // activation coordinator below are the same types used by the shipping app.
 import AppKit
-import SuperTrackpadCore
+import HandyToolbeltCore
 
 private final class NoCapture: WindowPreviewCapturing {
     func hasPermission() -> Bool { false }

@@ -1,7 +1,7 @@
 // Development-only deterministic notification benchmark; never starts input or dispatches actions.
 import AppKit
 import Combine
-import SuperTrackpadCore
+import HandyToolbeltCore
 
 @main
 struct GesturePerformanceChecks {
@@ -9,7 +9,7 @@ struct GesturePerformanceChecks {
         precondition(condition(), message)
     }
     static func main() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SuperTools-performance-\(UUID())")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("HandyToolbelt-performance-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = ConfigurationStore(url: directory.appendingPathComponent("settings.json"))

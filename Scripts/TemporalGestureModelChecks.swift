@@ -1,7 +1,7 @@
 // Temporal gesture integration uses synthetic contacts, a fake keyboard, and
 // captured Show Text actions. No hardware input or system actions are emitted.
 import AppKit
-import SuperTrackpadCore
+import HandyToolbeltCore
 
 @main struct TemporalGestureModelChecks {
     static var checks = 0

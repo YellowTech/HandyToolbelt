@@ -30,7 +30,7 @@ func selectSigningIdentity(override: String?, pin: String?, pinExists: Bool, has
     if let pin {
         let identity = pin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !identity.isEmpty else {
-            throw BuildFailure("The local signing identity is empty. Set SUPERTRACKPAD_SIGN_IDENTITY explicitly.")
+            throw BuildFailure("The local signing identity is empty. Set HANDYTOOLBELT_SIGN_IDENTITY explicitly.")
         }
         return SigningSelection(identity: identity, persist: false)
     }
@@ -43,10 +43,10 @@ func selectSigningIdentity(override: String?, pin: String?, pinExists: Bool, has
         return SigningSelection(identity: identities[0], persist: true)
     }
     guard identities.isEmpty else {
-        throw BuildFailure("Found \(identities.count) development identities. Choose one with SUPERTRACKPAD_SIGN_IDENTITY='YOUR_SIGNING_IDENTITY' swift Scripts/build.swift.")
+        throw BuildFailure("Found \(identities.count) development identities. Choose one with HANDYTOOLBELT_SIGN_IDENTITY='YOUR_SIGNING_IDENTITY' swift Scripts/build.swift.")
     }
     guard !hasExistingApp else {
-        throw BuildFailure("No development signing identity found and a repository app already exists. Set SUPERTRACKPAD_SIGN_IDENTITY to its signing identity, or explicitly use '-' for an ad-hoc build that may require granting macOS permissions again.")
+        throw BuildFailure("No development signing identity found and a repository app already exists. Set HANDYTOOLBELT_SIGN_IDENTITY to its signing identity, or explicitly use '-' for an ad-hoc build that may require granting macOS permissions again.")
     }
     return SigningSelection(identity: "-", persist: true)
 }
@@ -56,16 +56,21 @@ func build() throws {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     let fm = FileManager.default
     let bundle = root.appendingPathComponent("dist/HandyToolbelt.app")
-    let previousBundles = ["SuperTools.app", "SuperTrackpad.app"].map { root.appendingPathComponent("dist/\($0)") }
     func requireStoppedApp() throws {
-        for candidate in [bundle] + previousBundles where fm.fileExists(atPath: candidate.path) {
-            guard Bundle(url: candidate)?.bundleIdentifier == "local.SuperTrackpad" else {
-                throw BuildFailure("Refusing to replace an unrelated bundle at \(candidate.path). Move it aside explicitly before building.")
+        if fm.fileExists(atPath: bundle.path) {
+            let installed = Bundle(url: bundle)
+            // Early builds used a different identifier but already had this product name.
+            let matchesProduct = installed?.object(forInfoDictionaryKey: "CFBundleName") as? String == "HandyToolbelt"
+                && installed?.object(forInfoDictionaryKey: "CFBundlePackageType") as? String == "APPL"
+            guard installed?.bundleIdentifier == "local.HandyToolbelt" || matchesProduct else {
+                throw BuildFailure("Refusing to replace an unrelated bundle at \(bundle.path). Move it aside explicitly before building.")
             }
         }
-        let running = NSRunningApplication.runningApplications(withBundleIdentifier: "local.SuperTrackpad")
-        let managedPaths = ([bundle] + previousBundles).map { $0.resolvingSymlinksInPath() }
-        guard !running.contains(where: { app in app.bundleURL.map { managedPaths.contains($0.resolvingSymlinksInPath()) } ?? false }) else {
+        // Match the installed path so this also catches an early build's running process.
+        let managedPath = bundle.resolvingSymlinksInPath()
+        guard !NSWorkspace.shared.runningApplications.contains(where: {
+            $0.bundleURL?.resolvingSymlinksInPath() == managedPath
+        }) else {
             throw BuildFailure("Quit HandyToolbelt (including any older repository copy) from its menu bar before building. Replacing a running app can leave macOS checking the old code signature.")
         }
     }
@@ -80,7 +85,7 @@ func build() throws {
     }
     // Keep the chosen identity stable across builds, including automatic ad-hoc signing.
     let identityFile = root.appendingPathComponent(".local-signing-identity")
-    let override = ProcessInfo.processInfo.environment["SUPERTRACKPAD_SIGN_IDENTITY"]
+    let override = ProcessInfo.processInfo.environment["HANDYTOOLBELT_SIGN_IDENTITY"]
     let pinExists = fm.fileExists(atPath: identityFile.path)
     let pin = (override?.isEmpty ?? true) && pinExists
         ? try String(contentsOf: identityFile, encoding: .utf8) : nil
@@ -88,7 +93,7 @@ func build() throws {
         override: override,
         pin: pin,
         pinExists: pinExists,
-        hasExistingApp: ([bundle] + previousBundles).contains { fm.fileExists(atPath: $0.path) },
+        hasExistingApp: fm.fileExists(atPath: bundle.path),
         available: { try capture("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"]) })
     let identity = selection.identity
     if identity == "-" {
@@ -119,25 +124,37 @@ func build() throws {
         throw BuildFailure("Could not locate the compiled app")
     }
     try requireStoppedApp()
-    if !fm.fileExists(atPath: bundle.path), let previousBundle = previousBundles.first(where: { fm.fileExists(atPath: $0.path) }) {
-        try fm.moveItem(at: previousBundle, to: bundle)
-    }
     let contents = bundle.appendingPathComponent("Contents")
+    let previousExecutable = Bundle(url: bundle)?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String
+    if let previousExecutable {
+        guard !previousExecutable.isEmpty, ![".", ".."].contains(previousExecutable),
+              !previousExecutable.contains("/"), !previousExecutable.contains("\\") else {
+            throw BuildFailure("The installed app has an invalid executable name. Move it aside before rebuilding.")
+        }
+    }
     try fm.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
     try fm.createDirectory(at: contents.appendingPathComponent("Resources"), withIntermediateDirectories: true)
     func replace(_ source: URL, _ target: URL) throws {
         if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
         try fm.copyItem(at: source, to: target)
     }
-    try replace(URL(fileURLWithPath: path).appendingPathComponent("SuperTrackpad"), contents.appendingPathComponent("MacOS/SuperTrackpad"))
-    try replace(URL(fileURLWithPath: path).appendingPathComponent("supertools"), contents.appendingPathComponent("MacOS/handytoolbelt"))
-    let legacyCLI = contents.appendingPathComponent("MacOS/supertools")
-    if (try? fm.attributesOfItem(atPath: legacyCLI.path)) != nil { try fm.removeItem(at: legacyCLI) }
-    try fm.createSymbolicLink(atPath: legacyCLI.path, withDestinationPath: "handytoolbelt")
+    try replace(URL(fileURLWithPath: path).appendingPathComponent("HandyToolbeltApp"), contents.appendingPathComponent("MacOS/HandyToolbeltApp"))
+    try replace(URL(fileURLWithPath: path).appendingPathComponent("handytoolbelt"), contents.appendingPathComponent("MacOS/handytoolbelt"))
+    if let previousExecutable, !["handytoolbeltapp", "handytoolbelt"].contains(previousExecutable.lowercased()) {
+        let obsolete = contents.appendingPathComponent("MacOS/\(previousExecutable)")
+        if (try? fm.attributesOfItem(atPath: obsolete.path)) != nil { try fm.removeItem(at: obsolete) }
+    }
+    // Remove obsolete CLI aliases without following or removing their targets.
+    for entry in try fm.contentsOfDirectory(at: contents.appendingPathComponent("MacOS"), includingPropertiesForKeys: nil)
+        where entry.lastPathComponent != "handytoolbelt" {
+        if (try? fm.destinationOfSymbolicLink(atPath: entry.path)) == "handytoolbelt" {
+            try fm.removeItem(at: entry)
+        }
+    }
     try replace(root.appendingPathComponent("Resources/Info.plist"), contents.appendingPathComponent("Info.plist"))
 
     // The same PDF backs the menu-bar template and every app icon resolution.
-    try replace(root.appendingPathComponent("Sources/SuperTrackpad/Resources/Toolbelt.pdf"), contents.appendingPathComponent("Resources/Toolbelt.pdf"))
+    try replace(root.appendingPathComponent("Sources/HandyToolbeltApp/Resources/Toolbelt.pdf"), contents.appendingPathComponent("Resources/Toolbelt.pdf"))
     try run("/usr/bin/xcrun", ["swift", "Scripts/render-icon.swift", contents.appendingPathComponent("Resources/AppIcon.icns").path])
     try run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", contents.appendingPathComponent("MacOS/handytoolbelt").path])
     try run("/usr/bin/codesign", ["--verify", "--strict", contents.appendingPathComponent("MacOS/handytoolbelt").path])

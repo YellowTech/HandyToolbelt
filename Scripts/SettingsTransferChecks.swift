@@ -1,6 +1,6 @@
 import AppKit
-import SuperTrackpadCore
-import SuperToolsControl
+import HandyToolbeltCore
+import HandyToolbeltControl
 
 @main struct SettingsTransferChecks {
     static var checks = 0

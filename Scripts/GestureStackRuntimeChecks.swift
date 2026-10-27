@@ -1,5 +1,5 @@
 import AppKit
-import SuperTrackpadCore
+import HandyToolbeltCore
 
 @main struct GestureStackRuntimeChecks {
     static var checks = 0

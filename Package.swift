@@ -2,16 +2,16 @@
 import PackageDescription
 
 let package = Package(
-    name: "SuperTrackpad",
+    name: "HandyToolbelt",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "SuperTrackpad", targets: ["SuperTrackpad"]), .executable(name: "supertools", targets: ["supertools"])],
+    products: [.executable(name: "HandyToolbeltApp", targets: ["HandyToolbeltApp"]), .executable(name: "handytoolbelt", targets: ["HandyToolbeltCLI"])],
     targets: [
-        .target(name: "SuperTrackpadCore"),
-        .target(name: "SuperToolsControl", dependencies: ["SuperTrackpadCore"]),
-        .executableTarget(name: "supertools", dependencies: ["SuperToolsControl"]),
-        .testTarget(name: "SuperToolsControlTests", dependencies: ["SuperToolsControl", "supertools"]),
-        .executableTarget(name: "SuperTrackpad", dependencies: ["SuperTrackpadCore", "SuperToolsControl"], resources: [.copy("Resources/Toolbelt.pdf")]),
-        .testTarget(name: "SuperTrackpadCoreTests", dependencies: ["SuperTrackpadCore"])
+        .target(name: "HandyToolbeltCore"),
+        .target(name: "HandyToolbeltControl", dependencies: ["HandyToolbeltCore"]),
+        .executableTarget(name: "HandyToolbeltCLI", dependencies: ["HandyToolbeltControl"]),
+        .testTarget(name: "HandyToolbeltControlTests", dependencies: ["HandyToolbeltControl", "HandyToolbeltCLI"]),
+        .executableTarget(name: "HandyToolbeltApp", dependencies: ["HandyToolbeltCore", "HandyToolbeltControl"], resources: [.copy("Resources/Toolbelt.pdf")]),
+        .testTarget(name: "HandyToolbeltCoreTests", dependencies: ["HandyToolbeltCore"])
     ],
     swiftLanguageModes: [.v5]
 )

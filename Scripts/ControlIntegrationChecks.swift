@@ -2,8 +2,8 @@
 // native actions. No production endpoint, app launch, input listener, or panels.
 import AppKit
 import IOKit.pwr_mgt
-import SuperTrackpadCore
-import SuperToolsControl
+import HandyToolbeltCore
+import HandyToolbeltControl
 
 private struct CheckError: LocalizedError { var errorDescription: String? }
 private final class CLIResult {
@@ -112,7 +112,7 @@ struct ControlIntegrationChecks {
             coffee.configure(enabled: config.coffeeModuleEnabled, running: true)
         })
         var covered: Set<ControlCommand> = []
-        let suite = "SuperTools-CLI-consent-\(UUID())"
+        let suite = "HandyToolbelt-CLI-consent-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = LocalCLIControlPreferences(defaults: defaults)

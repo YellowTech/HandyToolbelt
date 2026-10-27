@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import SuperTrackpadCore
+import HandyToolbeltCore
 
 // Only the unused native preview references Theme. No AppKit windows are created.
 enum Theme { static let accent = Color.blue }

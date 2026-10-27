@@ -54,6 +54,6 @@ check(!LoginLaunchPolicy.isLoginItemLaunch(eventClass: AEEventClass(kCoreEventCl
 check(!LoginLaunchPolicy.isLoginItemLaunch(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEReopenApplication), reason: OSType(keyAELaunchedAsLogInItem)), "Only initial open event counts")
 print("Login item fake-driver and startup policy checks passed")
 SWIFT
-xcrun swiftc -swift-version 5 "$ROOT/Sources/SuperTrackpad/Host/LoginItemModel.swift" "$TEMP_DIR/main.swift" -o "$TEMP_DIR/check"
+xcrun swiftc -swift-version 5 "$ROOT/Sources/HandyToolbeltApp/Host/LoginItemModel.swift" "$TEMP_DIR/main.swift" -o "$TEMP_DIR/check"
 "$TEMP_DIR/check"
-xcrun swiftc -typecheck -swift-version 5 "$ROOT/Sources/SuperTrackpad/Host/LoginItemModel.swift" "$ROOT/Sources/SuperTrackpad/Host/LoginItemSettingsView.swift"
+xcrun swiftc -typecheck -swift-version 5 "$ROOT/Sources/HandyToolbeltApp/Host/LoginItemModel.swift" "$ROOT/Sources/HandyToolbeltApp/Host/LoginItemSettingsView.swift"

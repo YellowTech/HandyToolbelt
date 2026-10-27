@@ -1,6 +1,6 @@
 # HandyToolbelt release review
 
-Review date: 2026-10-26. Historical candidate: SuperTools 0.25.4 (50). The checks recorded below predate the HandyToolbelt rename and do not validate 0.26.0 (51).
+Review date: 2026-10-26. Historical candidate: early build 0.25.4 (50). The checks recorded below predate the HandyToolbelt rename and do not validate 0.27.0 (60). Paths and commands below use current names for navigation.
 
 The feature set is frozen for this review. The work concentrates on correctness, recoverability, lifecycle boundaries, and useful regression coverage. This is a source review and local validation, not a substitute for testing other macOS versions and hardware.
 
@@ -78,7 +78,7 @@ Local evidence: `.build/integration-stability-checks.log`, `.build/integration-s
 
 Record the build, macOS version, Mac/trackpad model, display arrangement, target apps, and pass/fail for each test. A UI automation tool that bypasses global event taps does not count as physical-input verification.
 
-1. **Switcher:** Option–Tab/release, Shift alone and Shift–Tab, two windows of the same app, minimized and hidden windows, another Space, SuperTools itself, Escape, target closure, and rapid repeat requests. Confirm the chosen window receives keyboard input.
+1. **Switcher:** Option–Tab/release, Shift alone and Shift–Tab, two windows of the same app, minimized and hidden windows, another Space, HandyToolbelt itself, Escape, target closure, and rapid repeat requests. Confirm the chosen window receives keyboard input.
 2. **Snapping:** first upward drag to the menu bar, left/right edges, corners, secondary displays with different origins/scales, moving away before release, and click/resize/content drags that must not snap. Test both shared and separate Spaces and the native-tiling conflict explanation.
 3. **Gestures:** tip-taps, long touch, double taps, click/force arbitration, corner stacks and held-key release. Check built-in and external trackpads, non-Force hardware, and Magic Mouse where supported. Gym suppresses production actions only while its page and app are focused.
 4. **Permissions and lifecycle:** fresh install, permission denied/revoked/restored, preview setup prompts, screen lock/display sleep, wake, device reconnect, quit/relaunch, and login launch. No stale input, stuck modifiers, or delayed focus theft.

@@ -1,5 +1,5 @@
 // Native sizing regression, using the shipped content constraints:
-// xcrun swiftc -parse-as-library Sources/SuperTrackpad/Host/MainWindowLayout.swift Scripts/ToolbarLayoutChecks.swift -o /tmp/SuperTools-toolbar-checks
+// xcrun swiftc -parse-as-library Sources/HandyToolbeltApp/Host/MainWindowLayout.swift Scripts/ToolbarLayoutChecks.swift -o /tmp/HandyToolbelt-toolbar-checks
 // Run from the repository root.
 import AppKit
 import SwiftUI

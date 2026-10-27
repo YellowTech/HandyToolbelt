@@ -5,8 +5,8 @@ import Combine
 import SwiftUI
 import ApplicationServices
 import IOKit.pwr_mgt
-import SuperToolsControl
-import SuperTrackpadCore
+import HandyToolbeltControl
+import HandyToolbeltCore
 
 @main
 struct ModelNavigationChecks {

@@ -1,7 +1,7 @@
 // Native event pipeline checks with local settings and captured Show Text output.
 // No event taps, hardware, or real input injection are used by this runner.
 import AppKit
-import SuperTrackpadCore
+import HandyToolbeltCore
 
 @main struct ForceClickModelChecks {
     static var count = 0

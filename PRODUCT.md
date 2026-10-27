@@ -42,7 +42,7 @@ The user normally gestures with the right hand; the line between fingers slopes 
 Tip-taps support one to three resting fingers and a tap on either side; the middle variant uses two resting fingers. Anchored swipes move one finger while one to three others stay down. These compose with corner holds, keyboard modifiers, app groups, and stacks. How-to demonstrations teach the selected gesture without entering the recognition or action pipeline. Force click uses native macOS stage 2 on a Force Touch trackpad; raw pressure remains a visual cue only. Native app clicks may also occur. Freehand shape recording remains outside the current scope.
 
 ## Open Decisions
-HandyToolbelt is the suite name; internal package and settings identifiers retain SuperTrackpad for compatibility. Magic Mouse support is secondary and hardware-dependent. Corner modifiers exclude the held finger from the action gesture's finger count. Actual performance versus AltTab needs measurement.
+HandyToolbelt is the suite, package, and settings identity. Magic Mouse support is secondary and hardware-dependent. Corner modifiers exclude the held finger from the action gesture's finger count. Actual performance versus AltTab needs measurement.
 
 
 

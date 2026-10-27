@@ -3,19 +3,19 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>local.SuperTrackpad</string>
+	<string>local.HandyToolbelt</string>
 	<key>CFBundleName</key>
 	<string>HandyToolbelt</string>
 	<key>CFBundleDisplayName</key>
 	<string>HandyToolbelt</string>
 	<key>CFBundleExecutable</key>
-	<string>SuperTrackpad</string>
+	<string>HandyToolbeltApp</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.26.7</string>
+	<string>0.27.0</string>
 	<key>CFBundleVersion</key>
-	<string>59</string>
+	<string>60</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
