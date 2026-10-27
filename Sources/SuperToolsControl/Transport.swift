@@ -6,7 +6,7 @@ private let limit = 1_048_576
 private func failure(_ code: String, _ message: String) -> ControlError { ControlError(code: code, message: message) }
 private func checked(_ path: String, socket: Bool) throws -> stat {
     var s = stat()
-    guard lstat(path, &s) == 0 else { throw failure("unavailable", "HandyToolbelt is unavailable. Open HandyToolbelt, then retry. (\(String(cString: strerror(errno))))") }
+    guard lstat(path, &s) == 0 else { throw failure("unavailable", "HandyToolbelt is unavailable. Open HandyToolbelt → Settings → Automations & CLI and enable Allow CLI control, then retry. (\(String(cString: strerror(errno))))") }
     guard s.st_uid == getuid(), (s.st_mode & S_IFMT) == (socket ? S_IFSOCK : S_IFDIR), (s.st_mode & 0o077) == 0 else { throw failure("unsafeEndpoint", "Endpoint must be owned by this user, private, and have the expected file type.") }
     return s
 }
@@ -41,10 +41,10 @@ private func connectFD(_ fd: Int32, _ path: String, deadline: Date) throws {
     var a = try address(path)
     let r = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
     if r != 0 {
-        guard errno == EINPROGRESS else { throw failure(errno == ECONNREFUSED ? "refused" : "unavailable", "HandyToolbelt is unavailable. Open HandyToolbelt, then retry.") }
+        guard errno == EINPROGRESS else { throw failure(errno == ECONNREFUSED ? "refused" : "unavailable", "HandyToolbelt is unavailable. Open HandyToolbelt → Settings → Automations & CLI and enable Allow CLI control, then retry.") }
         try waitFD(fd, Int16(POLLOUT), deadline)
         var e: Int32 = 0; var length = socklen_t(MemoryLayout.size(ofValue: e)); getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &length)
-        guard e == 0 else { throw failure(e == ECONNREFUSED ? "refused" : "unavailable", "HandyToolbelt is unavailable. Open HandyToolbelt, then retry.") }
+        guard e == 0 else { throw failure(e == ECONNREFUSED ? "refused" : "unavailable", "HandyToolbelt is unavailable. Open HandyToolbelt → Settings → Automations & CLI and enable Allow CLI control, then retry.") }
     }
     var uid: uid_t = 0; var gid: gid_t = 0
     guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { throw failure("unsafePeer", "Local control peer belongs to another user.") }

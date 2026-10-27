@@ -23,7 +23,8 @@ public enum CLIParser {
       display dismiss [ID]
       automations list | run ID_OR_NAME | status RUN_ID | cancel RUN_ID
     --help shows this help. --socket PATH overrides the private local socket.
-    The HandyToolbelt app must already be running. Responses are JSON.
+    The HandyToolbelt app must be running with Allow CLI control enabled in
+    Settings → Automations & CLI. Responses are JSON.
     """ + "\n\nAll protocol commands (generic call):\n" + ControlContract.commandHelp
     public static func parse(_ arguments: [String], readFile: (String) throws -> Data = { try Data(contentsOf: URL(fileURLWithPath: $0)) }, readStdin: () throws -> Data = { FileHandle.standardInput.readDataToEndOfFile() }) throws -> CLIInvocation {
         func bad(_ message: String) -> ControlError { ControlError(code: "usage", message: message) }

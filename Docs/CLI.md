@@ -1,6 +1,6 @@
 # HandyToolbelt CLI
 
-The signed app includes `Contents/MacOS/handytoolbelt`, with `supertools` retained as a compatibility alias. Run that executable by its full path, or create your own shell alias. Keep the alias pointing into the app bundle so app updates also update the CLI; a separately copied executable can become outdated. HandyToolbelt does not edit PATH or shell configuration. Open the app before calling the CLI; the CLI never launches it automatically. The running app's `schema` is authoritative.
+The signed app includes `Contents/MacOS/handytoolbelt`, with `supertools` retained as a compatibility alias. Run that executable by its full path, or create your own shell alias. Keep the alias pointing into the app bundle so app updates also update the CLI; a separately copied executable can become outdated. HandyToolbelt does not edit PATH or shell configuration. Open the app and enable Allow CLI control before calling the CLI; the CLI never launches it automatically. The running app's `schema` is authoritative.
 
 ```sh
 /path/to/HandyToolbelt.app/Contents/MacOS/handytoolbelt --help
@@ -11,6 +11,12 @@ The signed app includes `Contents/MacOS/handytoolbelt`, with `supertools` retain
 Commands return one JSON response on stdout, including failures. Exit codes are 0 for success, 1 for a rejected command, 2 for command-line/input errors, and 3 for connection or transport failures. Local diagnostics also go to stderr. `--help` prints usage text instead of a JSON response.
 
 The complete [generated command reference](CLI-reference.md) lists every command, its input and successful result schema, and example parameters. `--help` works offline and includes all protocol commands. Friendly aliases cover common workflows; `call` forwards any command name and JSON object unchanged, including commands added by a newer app.
+
+CLI control is off by default, including on existing installations. Enable **Allow CLI control** in HandyToolbelt → Settings → Automations & CLI on each Mac. This persistent local choice is excluded from settings exports, imports, and CLI configuration; it is managed in the app and unavailable through configuration or CLI commands.
+
+Once enabled, scripts and agents running as your macOS user can change settings and run actions using HandyToolbelt’s permissions without approval for individual commands. The private socket’s same-user checks do not distinguish trusted scripts from other processes running as that user. This opt-in is intended for a trusted same-user environment, not as a tamper-resistant boundary against malware able to edit your local preferences or settings.
+
+Turning it off closes the listener and drops queued requests; actions already started can finish. In-app and gesture automations remain available while CLI control is off. The section shows actual CLI availability and offers Retry if listening fails.
 
 ## Configuration
 

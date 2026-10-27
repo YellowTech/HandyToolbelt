@@ -19,7 +19,7 @@ struct SettingsTransferView: View {
             Text("Save a JSON file to iCloud Drive or any folder, then import it on another Mac. The file includes actions and AppleScript.")
                 .font(.callout).foregroundStyle(Theme.secondary)
             HeaderDisclosureGroup("What is included?") {
-                Text("Includes saved tool preferences, mappings, stacks, app groups, and automations. Excludes macOS permissions, Start at login registration, active Coffee selections, and Gesture Gym trials.")
+                Text("Includes saved tool preferences, mappings, stacks, app groups, and automations. Excludes Allow CLI control, macOS permissions, Start at login registration, active Coffee selections, and Gesture Gym trials.")
                     .font(.callout).foregroundStyle(Theme.secondary)
             }
             if trackpad.settingsNeedRecovery {
@@ -66,7 +66,7 @@ private struct SettingsImportReviewView: View {
                         tool("Power", config.powerModuleEnabled)
                         tool("Coffee", config.coffeeModuleEnabled)
                     }.font(.callout)
-                    Text("This replaces all saved settings. Current settings are backed up locally first. macOS permissions and Start at login are managed separately.")
+                    Text("This replaces all saved settings. Current settings are backed up locally first. Allow CLI control, macOS permissions, and Start at login are managed separately.")
                         .font(.callout).foregroundStyle(Theme.secondary)
                     Text("Includes \(count(actions.count, "action")) and \(count(actions.filter { $0.kind == .appleScript }.count, "AppleScript definition")), including disabled mappings. Importing does not run actions; enabled mappings can run them during later use.")
                         .font(.callout)

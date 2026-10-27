@@ -22,9 +22,7 @@ final class ProductivityModel: ObservableObject {
     let coffee: CoffeeModel
     let loginItem: LoginItemModel
     let automationRunner: AutomationRunner
-    @Published private(set) var controlError: String?
-    private let controlServerEnabled: Bool
-    private var controlServer: ControlServer?
+    let cliControl: CLIControlModel
     lazy var commands = ControlCommandService(display: display, runner: automationRunner, coffee: coffee, power: power, loginItem: loginItem,
         getConfiguration: { [unowned self] in self.trackpad.configuration },
         saveConfiguration: { [unowned self] value in try self.trackpad.replaceConfiguration(value); self.apply(value) },
@@ -32,7 +30,7 @@ final class ProductivityModel: ObservableObject {
             "accessibility": .bool(self.trackpad.hasAccessibility),
             "trackpadRunning": .bool(self.trackpad.isRunning),
             "inputError": self.trackpad.inputError.map(JSONValue.string) ?? .null,
-            "controlAvailable": .bool(self.controlServer?.isRunning ?? false),
+            "controlAvailable": .bool(self.cliControl.available),
             "switcher": .object([
                 "showing": .bool(self.windows.isShowing),
                 "loading": .bool(self.windows.isLoading),
@@ -93,10 +91,10 @@ final class ProductivityModel: ObservableObject {
     private var subscriptions = Set<AnyCancellable>()
     private var started = false
 
-    init(trackpad: AppModel = AppModel(), windows: WindowSwitcherModel = WindowSwitcherModel(), display: DisplayModel = DisplayModel(), coffee: CoffeeModel = CoffeeModel(), power: PowerModel = PowerModel(), loginItem: LoginItemModel = LoginItemModel(), controlServerEnabled: Bool = true) {
+    init(trackpad: AppModel = AppModel(), windows: WindowSwitcherModel = WindowSwitcherModel(), display: DisplayModel = DisplayModel(), coffee: CoffeeModel = CoffeeModel(), power: PowerModel = PowerModel(), loginItem: LoginItemModel = LoginItemModel(), controlServerEnabled: Bool = true, controlPreferences: CLIControlPreferences = LocalCLIControlPreferences(), controlServerFactory: @escaping CLIControlModel.ServerFactory = { ControlServer(handler: $0) }) {
         self.power = power
         self.loginItem = loginItem
-        self.coffee = coffee; self.trackpad = trackpad; self.windows = windows; self.display = display; self.controlServerEnabled = controlServerEnabled
+        self.coffee = coffee; self.trackpad = trackpad; self.windows = windows; self.display = display; self.cliControl = CLIControlModel(preferences: controlPreferences, enabled: controlServerEnabled, serverFactory: controlServerFactory)
         self.automationRunner = AutomationRunner(execute: trackpad.executor.execute)
         if trackpad.settingsNeedRecovery { section = .trackpad }
         let arguments = ProcessInfo.processInfo.arguments
@@ -133,18 +131,14 @@ final class ProductivityModel: ObservableObject {
             self?.refreshPermissions()
         }
         refreshPermissions()
-        if controlServerEnabled {
-            let server = ControlServer { [weak self] request, reply in
-                guard let self else { reply(.failure(id: request.id, code: "unavailable", message: "App is stopping.")); return }
-                reply(self.commands.handle(request))
-            }
-            do { try server.start(); controlServer = server; controlError = nil }
-            catch { controlError = "CLI unavailable: \(error.localizedDescription)" }
+        cliControl.start { [weak self] request, reply in
+            guard let self else { reply(.failure(id: request.id, code: "unavailable", message: "App is stopping.")); return }
+            reply(self.commands.handle(request))
         }
     }
     func stop() {
         settingsTransfer.cancelIfActive()
-        started = false; power.configure(enabled: trackpad.configuration.powerModuleEnabled, running: false); coffee.configure(enabled: trackpad.configuration.coffeeModuleEnabled, running: false); controlServer?.stop(); controlServer = nil; automationRunner.stop(); display.dismiss(); trackpad.stop(); windows.stop(); snapping.stop()
+        started = false; power.configure(enabled: trackpad.configuration.powerModuleEnabled, running: false); coffee.configure(enabled: trackpad.configuration.coffeeModuleEnabled, running: false); cliControl.stop(); automationRunner.stop(); display.dismiss(); trackpad.stop(); windows.stop(); snapping.stop()
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
         activationObserver = nil
     }

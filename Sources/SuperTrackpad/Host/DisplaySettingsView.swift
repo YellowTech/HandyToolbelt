@@ -74,6 +74,8 @@ struct AutomationSettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Automations & CLI", systemImage: "terminal").font(.headline)
             VStack(alignment: .leading, spacing: 12) {
+                CLIControlSettingsView(model: host.cliControl)
+                Divider()
                 ForEach(trackpad.configuration.automations) { automation in
                     HStack {
                         Text(automation.name)
@@ -107,7 +109,6 @@ struct AutomationSettingsView: View {
                         NSPasteboard.general.setString(Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/handytoolbelt").path, forType: .string)
                     }
                 }
-                if let error = host.controlError { Text(error).font(.callout).foregroundStyle(.orange) }
                 if let message { Text(message).font(.callout).foregroundStyle(.orange) }
             }.padding(.top, 12)
         }
@@ -138,6 +139,31 @@ struct AutomationSettingsView: View {
                     }.keyboardShortcut(.defaultAction)
                 }
             }.padding(24).frame(width: 680, height: 520).graphiteTheme()
+        }
+    }
+}
+
+struct CLIControlSettingsView: View {
+    @ObservedObject var model: CLIControlModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Allow CLI control")
+                Spacer()
+                Toggle("Allow CLI control", isOn: Binding(get: { model.allowed }, set: model.setAllowed))
+                    .labelsHidden().toggleStyle(.switch).fixedSize()
+            }
+            Text("Let scripts and agents running as your macOS user change settings and run actions with HandyToolbelt’s permissions. No approval is requested for individual commands.")
+                .font(.callout).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
+            if model.allowed {
+                Text(model.available ? "CLI ready" : "CLI unavailable").font(.callout).foregroundStyle(Theme.secondary)
+                if let error = model.error {
+                    Text(error).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    Button("Retry") { model.retry() }
+                }
+            }
+            Text("Saved on this Mac. Turning off stops new CLI commands; actions already started can finish.")
+                .font(.caption).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

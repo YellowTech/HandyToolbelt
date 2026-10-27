@@ -112,7 +112,12 @@ struct ControlIntegrationChecks {
             coffee.configure(enabled: config.coffeeModuleEnabled, running: true)
         })
         var covered: Set<ControlCommand> = []
-        let server = ControlServer(socketPath: socketPath) { request, reply in
+        let suite = "SuperTools-CLI-consent-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = LocalCLIControlPreferences(defaults: defaults)
+        let control = CLIControlModel(preferences: preferences, serverFactory: { ControlServer(socketPath: socketPath, handler: $0) })
+        let handler: CLIControlModel.Handler = { request, reply in
             let response = service.handle(request)
             if let command = ControlCommand(rawValue: request.command), response.ok, let result = response.result {
                 covered.insert(command)
@@ -122,7 +127,18 @@ struct ControlIntegrationChecks {
             }
             reply(response)
         }
-        try server.start(); defer { server.stop() }
+        control.start(handler: handler); defer { control.stop() }
+        check(!control.allowed && !control.available && !FileManager.default.fileExists(atPath: socketPath), "Missing consent defaults off without creating a listener")
+        // UI/gesture commands use the service directly while the CLI stays off.
+        let localRun = try service.run("Complete")
+        try pump(until: { runner.status(localRun.id)?.state == .completed })
+        check(executed == ["Signal"] && !control.available, "In-app automation works with CLI off")
+        executed.removeAll()
+        let offRevision = try config.revision()
+        _ = try service.apply(config, expectedRevision: offRevision)
+        check(!preferences.allowed && !control.available, "Configuration replacement cannot grant CLI consent")
+        control.setAllowed(true)
+        check(control.allowed && control.available && preferences.allowed, "Opt-in starts isolated listener immediately")
 
         let schema = try result(cli(["schema"]))
         check(schema.objectValue?["commands"]?.objectValue?["config.apply"] != nil && schema.objectValue?["$defs"] != nil, "Schema exposes commands and configuration")
@@ -303,6 +319,65 @@ struct ControlIntegrationChecks {
         check(unknown.0.error?.code == "invalid_parameters", "Unknown command parameters fail clearly")
         check(display.progress.sessions.isEmpty, "Disabled feedback leaves no visible progress sessions")
         check(covered == Set(ControlCommand.allCases), "Every command has a successful real CLI handler result: missing \(Set(ControlCommand.allCases).subtracting(covered))")
+        check(preferences.allowed && control.available, "CLI config.apply never revokes local consent")
+        let exported = try result(cli(["config", "get"]))
+        check(exported.objectValue?["configuration"]?.objectValue?["allowCLIControl"] == nil, "Exported configuration excludes local consent")
+        var consentPayload = try JSONValue(encoding: config).objectValue!
+        consentPayload["allowCLIControl"] = .bool(false)
+        let consentAttempt = try call("config.apply", ["configuration": .object(consentPayload), "expectedRevision": .string(try config.revision())])
+        check(!consentAttempt.0.ok && preferences.allowed && control.available, "CLI configuration cannot smuggle a consent field")
+        let consentValidation = try call("config.validate", ["configuration": .object(consentPayload)])
+        check(consentValidation.0.ok && consentValidation.0.result?.objectValue?["errors"]?.arrayValue?.isEmpty == false && preferences.allowed, "CLI validation reports an injected consent field without changing consent")
+        let testOverride = CLIControlModel(preferences: preferences, enabled: false, serverFactory: { _ in
+            fatalError("Disabled test override must never create a server")
+        })
+        testOverride.start(handler: handler)
+        check(testOverride.allowed && !testOverride.available, "Test override suppresses listener even with saved opt-in")
+        testOverride.stop()
+        // Queue a mutating request while the main queue is occupied, then disable.
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        var address = sockaddr_un(); address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(socketPath.utf8CString)
+        withUnsafeMutableBytes(of: &address.sun_path) { target in target.copyBytes(from: bytes.map { UInt8(bitPattern: $0) }) }
+        let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+        check(connected == 0, "Queued client connects to isolated endpoint")
+        let request = ControlRequest(command: "automations.run", parameters: ["automation": .string("Complete")])
+        var requestData = try JSONEncoder().encode(request); requestData.append(10)
+        _ = requestData.withUnsafeBytes { write(fd, $0.baseAddress!, $0.count) }
+        Thread.sleep(forTimeInterval: 0.1) // Let the transport queue the handler without running the main queue.
+        let beforeQueued = executed.count
+        control.setAllowed(false)
+        control.setAllowed(true) // Old queued requests must stay revoked after a quick re-enable.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15)); close(fd)
+        check(executed.count == beforeQueued && runner.active == nil, "Disable/re-enable drops old queued CLI commands before they have effects")
+        control.setAllowed(false)
+        check(!control.available && !preferences.allowed && !FileManager.default.fileExists(atPath: socketPath), "Disable removes listener immediately")
+        let unavailable = try cli(["status"])
+        check(!unavailable.0.ok && unavailable.1 != 0, "New CLI requests fail after disable")
+        _ = try service.apply(config, expectedRevision: config.revision())
+        check(!preferences.allowed, "Imported/replaced configuration cannot grant consent")
+        control.setAllowed(true)
+        _ = try result(cli(["status"]))
+        control.stop()
+        check(preferences.allowed && !control.available, "Host stop preserves consent and closes listener")
+        let restarted = CLIControlModel(preferences: LocalCLIControlPreferences(defaults: defaults), serverFactory: { ControlServer(socketPath: socketPath, handler: $0) })
+        restarted.start(handler: handler)
+        check(restarted.allowed && restarted.available, "Restart restores local opt-in")
+        _ = try result(cli(["status"]))
+        restarted.stop()
+        // An ordinary file is an unsafe endpoint; Retry must recover after it is removed.
+        try Data("occupied".utf8).write(to: URL(fileURLWithPath: socketPath))
+        restarted.start(handler: handler)
+        check(restarted.allowed && !restarted.available && restarted.error?.contains("Endpoint must be owned") == true, "Startup failure exposes actionable cause without claiming availability")
+        try FileManager.default.removeItem(atPath: socketPath)
+        restarted.retry()
+        check(restarted.available && restarted.error == nil, "Retry starts listener and clears failure")
+        _ = try result(cli(["status"]))
+        // Disable does not cancel work already handed to the automation runner.
+        let inFlight = try service.run("Complete")
+        restarted.setAllowed(false)
+        try pump(until: { runner.status(inFlight.id)?.state == .completed })
+        check(!restarted.available && executed.count == beforeQueued + 1, "Disabling leaves already-started automation running")
         print("Control integration: \(count - failures.count)/\(count) checks passed")
         if !failures.isEmpty { exit(1) }
     }

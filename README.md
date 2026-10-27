@@ -28,6 +28,8 @@ swift Scripts/verify.swift
 
 Grant Accessibility for actions and window management; optional previews need Screen Recording, and scripts may request Automation access.
 
+CLI control is off by default. Enable **Allow CLI control** in Settings → Automations & CLI on each Mac to let same-user scripts and agents change settings and run actions without individual approvals. This choice stays local to the Mac.
+
 See the [CLI guide](Docs/CLI.md), [command reference](Docs/CLI-reference.md), and [development notes](Docs/Development.md).
 
 [MIT](LICENSE) · Copyright (c) 2026 HandyToolbelt contributors.
