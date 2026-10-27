@@ -202,6 +202,7 @@ struct ControlIntegrationChecks {
         trackpad.applicationGroups.append(group)
         trackpad.bindings = [.init(gesture: .init(kind: .swipeLeft, fingers: 3),
                                   action: .init(system: .previousTab), applicationGroupID: group.id)]
+        trackpad.bindings[0].name = "Previous editor tab"
         trackpad.bindings[0].showsToast = false
         trackpad.trackpadTuning.handAngleDegrees = -17
         trackpad.trackpadTuning.tapTravel = 0.04
@@ -215,6 +216,7 @@ struct ControlIntegrationChecks {
         check(try savedTrackpad.revision() == trackpad.revision() && store.load().revision() == trackpad.revision(), "Real CLI roundtrip preserves complete trackpad and unrelated configuration")
         check(try savedTrackpad.automations == original.decode(AppConfiguration.self).automations && savedTrackpad.mouseTuning == original.decode(AppConfiguration.self).mouseTuning,
               "Trackpad edit preserves workflows and mouse tuning")
+        check(try savedTrackpad.bindings[0].name == "Previous editor tab" && store.load().bindings[0].name == "Previous editor tab", "CLI roundtrip and settings persistence preserve mapping name")
         check(!savedTrackpad.bindings[0].showsToast, "CLI roundtrip preserves per-binding toast opt-out")
         let gesture = trackpad.bindings[0].gesture
         check(savedTrackpad.match(device: .trackpad, gesture: gesture, frontmostBundleIdentifier: "com.apple.dt.Xcode")?.action == trackpad.bindings[0].action.canonicalized

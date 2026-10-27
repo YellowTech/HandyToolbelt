@@ -1,5 +1,13 @@
 # HandyToolbelt release review
 
+## Gesture names — 0.28.2 (63), 2026-10-27
+
+Ordinary mappings support an optional name in the editor, saved list, live recognition label, and gesture toast. Blank names preserve previous labels; Gym teaching remains literal. Names round-trip through settings and the CLI. Visual review also caught stale nested list rows after edits; capturing current values fixes labels and selection without recreating row identities.
+
+Validation passed: 13 contract tests, 48 synthetic gesture/runtime checks, 182 CLI integration checks, release compilation, and strict signature verification. Native rendered checks covered named/unnamed mappings, long names, dark/light appearance, minimum window height, selection changes, and toast layout. The build ran out of disk once; completed temporary test runners were removed and remaining compilation ran sequentially. Evidence is under `.build/gesture-name-*`.
+
+Installed and relaunched 0.28.2 with the existing signing requirement and saved settings preserved. The previous app/settings backup is `.build/install-backups/2026-10-27T20-50-24Z`.
+
 ## Browser shortcut cleanup — 0.28.1 (62), 2026-10-27
 
 Previous/next browser tab now use ordinary Key press actions (Control–Shift–Tab / Control–Tab). The duplicate System choices are removed. Legacy settings and CLI inputs migrate across mappings, stacks, and automations; exports use the canonical shortcut form.

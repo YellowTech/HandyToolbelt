@@ -1047,7 +1047,7 @@ final class AppModel: ObservableObject {
         guard !synchronizeFocusedApplication(), temporalGeneration.map({ self.temporalGeneration == $0 }) ?? true else { return false }
         let binding = configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: frontmostBundleID, keyboardModifiers: stackKeyboard.physicalModifiers)
         if device == selectedDevice {
-            lastGesture = gesture.title
+            lastGesture = gymActive ? gesture.title : (binding?.displayName ?? gesture.title)
             lastDetail = gesture.corner == .none ? (binding?.action.title ?? "No matching action") : "\(gesture.corner.title) · \(binding?.action.title ?? "No matching action")"
             lastEventID = UUID()
         }
@@ -1070,7 +1070,7 @@ final class AppModel: ObservableObject {
                           temporalGeneration.map({ self.temporalGeneration == $0 }) ?? true, self.feedbackGeneration == generation, self.focusContext.generation == focusGeneration,
                           self.canShowGestureToast, binding?.showsToast != false,
                           self.configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: self.frontmostBundleID, keyboardModifiers: self.stackKeyboard.physicalModifiers) == binding else { return }
-                    self.onToast?(gesture.title)
+                    self.onToast?(binding?.displayName ?? gesture.title)
                 }
             }
             return false
@@ -1086,7 +1086,7 @@ final class AppModel: ObservableObject {
                   self.configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: self.frontmostBundleID, keyboardModifiers: self.stackKeyboard.physicalModifiers) == binding else { return }
             if supportsHaptics { self.haptics.play(binding.hapticPattern ?? self.configuration.hapticPattern) }
             if self.canShowGestureToast && binding.showsToast && binding.action.kind != .showText {
-                self.onToast?(gesture.title + " · " + binding.action.title)
+                self.onToast?(binding.toastTitle)
             }
             let complete: (Result<String, Error>) -> Void = { [weak self] result in
                 switch result {

@@ -9,5 +9,6 @@ The user prefers a split between primary-agent reasoning and Sol implementation 
 - Implementation agents should run focused checks and report changed files, results, and unresolved issues concisely. The primary agent reviews the result and performs necessary integration and user-flow validation.
 - Do not delegate already-completed work merely to satisfy this workflow, and do not claim a model change unless the tool call actually selected that model.
 - After validating app changes, install the new build on this Mac and restart HandyToolbelt by default. Preserve the signing identity and user settings, keep a rollback backup, and verify the new version is running.
+- Leave changes uncommitted and do not push until the user confirms they are good.
 
 Keep the shipped app pure Swift with Apple system frameworks, local storage, and no third-party runtime dependencies, network services, or subprocess-based action execution.

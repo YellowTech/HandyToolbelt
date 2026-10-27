@@ -179,6 +179,50 @@ import HandyToolbeltCore
         model.receive(device, [], time); output = []
         oneTap(); drain(0.55)
         check(output == ["tap"], "Scheduled idle deadline dispatches without further frames")
+        do {
+            // Capture callbacks only: named feedback must follow the matched app scope
+            // without posting keys, showing panels, or touching real settings.
+            model.selectWorkspace(.mappings); model.setSelected(false)
+            focus = "com.example.Editor"; access = true; model.refreshPermissions()
+            let automationID = UUID()
+            model.configuration.automations = [.init(id: automationID, name: "Captured", steps: [.init(name: "Captured", action: .init(kind: .showText, text: "Captured"))])]
+            let action = GestureAction(kind: .automation, automationID: automationID)
+            let group = ApplicationGroup(name: "Editor", applications: [.init("Editor", "com.example.Editor")])
+            model.configuration.applicationGroups = [group]
+            let fallback = GestureBinding(name: "Fallback", gesture: tap.gesture, action: action)
+            var scoped = GestureBinding(name: "  Editor command  ", gesture: tap.gesture, action: action, applicationGroupID: group.id)
+            model.configuration.bindings = [fallback, scoped]
+            model.configuration.displayModuleEnabled = true; model.configuration.visualFeedbackEnabled = true
+            var toasts: [String] = []; var executions = 0
+            model.onToast = { toasts.append($0) }
+            model.onAutomation = { _, complete in executions += 1; complete(.success("Captured")) }
+            func feedbackTap() { fresh(); toasts = []; oneTap(); drain() }
+            feedbackTap()
+            check(toasts == ["Editor command"] && model.lastGesture == "Editor command" && executions == 1,
+                  "Named toast and live label use matched scoped binding, without action suffix")
+            access = false; model.refreshPermissions()
+            feedbackTap(); check(toasts == ["Editor command"] && executions == 1, "Named recognition feedback remains available when actions cannot run")
+            access = true; model.refreshPermissions()
+            model.setSelected(true); model.selectWorkspace(.gym); model.gymGesture = tap.gesture
+            focus = Bundle.main.bundleIdentifier; _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
+            feedbackTap(); check(toasts.isEmpty && model.lastGesture == tap.gesture.title, "Gym live label retains raw gesture name and suppresses named toasts")
+            model.selectWorkspace(.mappings); model.setSelected(false)
+            focus = "com.example.Editor"; _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
+            scoped.showsToast = false; model.configuration.bindings = [fallback, scoped]
+            feedbackTap(); check(toasts.isEmpty && executions == 2, "Named mapping respects toast opt-out while action runs")
+            scoped.showsToast = true; model.configuration.bindings = [fallback, scoped]
+            model.configuration.displayModuleEnabled = false
+            feedbackTap(); check(toasts.isEmpty, "Named mapping respects disabled Overlays")
+            model.configuration.displayModuleEnabled = true; model.configuration.visualFeedbackEnabled = false
+            feedbackTap(); check(toasts.isEmpty, "Named mapping respects global gesture-toast preference")
+            model.configuration.visualFeedbackEnabled = true
+            scoped.action = .init(kind: .showText, text: "Own message"); model.configuration.bindings = [fallback, scoped]
+            feedbackTap(); check(toasts.isEmpty && output == ["Own message"], "Named Show Text action emits its own text without duplicate toast")
+            scoped.name = " \n "; scoped.action = action; model.configuration.bindings = [fallback, scoped]
+            feedbackTap(); check(toasts == [tap.gesture.title + " · " + action.title], "Blank name retains gesture and action toast")
+            model.configuration.bindings = []
+            feedbackTap(); check(toasts == [tap.gesture.title] && model.lastGesture == tap.gesture.title, "Unmapped recognition retains raw gesture name")
+        }
         print("Passed \(checks) temporal gesture model checks")
     }
 }

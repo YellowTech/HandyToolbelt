@@ -1441,6 +1441,10 @@ Successful result:
       "keyboardModifiers" : {
         "$ref" : "#/$defs/KeyboardModifierRequirement"
       },
+      "name" : {
+        "maxLength" : 120,
+        "type" : "string"
+      },
       "showsToast" : {
         "default" : true,
         "description" : "Allow this binding to show gesture toasts when global gesture toasts and Overlays are enabled. Show Text actions use their own message.",

@@ -80,57 +80,65 @@ struct ContentView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Capture values in the nested ForEach closures so stable scope IDs do
+        // not hide mapping edits or selection changes from SwiftUI's List diff.
+        let bindings = model.visibleBindings
+        let stacks = model.visibleStacks
+        let configuration = model.configuration
+        let selectedID = model.selectedID
+        let selectedStackID = model.selectedStackID
+        let selection = selectedID ?? selectedStackID
+        return VStack(alignment: .leading, spacing: 0) {
             Text("Saved mappings").font(.headline).padding(.horizontal, 16).padding(.top, 18).padding(.bottom, 10)
             HStack(spacing: 6) {
                 Circle().fill(model.devices.contains(where: { $0.kind == model.selectedDevice }) ? Theme.accent : .secondary).frame(width: 6, height: 6)
                 Text(model.deviceSummary).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
             }.padding(.horizontal, 17).padding(.bottom, 14)
-            List(selection: Binding<UUID?>(get: { model.selectedID ?? model.selectedStackID }, set: { id in
+            List(selection: Binding<UUID?>(get: { selection }, set: { id in
                 guard id != (model.selectedID ?? model.selectedStackID) else { return }
                 if model.configuration.stacks.contains(where: { $0.id == id }) { model.selectedStackID = id; model.selectedID = nil }
                 else { model.selectedID = id; model.selectedStackID = nil }
             })) {
                 ForEach(model.mappingScopeIDs, id: \.self) { scopeID in
-                    ForEach(model.visibleBindings.filter { $0.applicationGroupID == scopeID }) { binding in
+                    ForEach(bindings.filter { $0.applicationGroupID == scopeID }) { binding in
                         HStack(alignment: .center, spacing: 12) {
                             GestureGlyph(gesture: binding.gesture).frame(width: 40, height: 28)
                                 .foregroundStyle(binding.isEnabled ? Theme.text : .secondary)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(binding.gesture.title).fontWeight(.medium)
+                                Text(binding.displayName).fontWeight(.medium).lineLimit(2)
                                 Text(binding.action.title).font(.caption).foregroundStyle(Theme.secondary)
                                 HStack(spacing: 5) {
-                                    if let id = binding.applicationGroupID, let group = model.configuration.applicationGroups.first(where: { $0.id == id }) { ApplicationGroupIcons(group: group) }
-                                    Text(model.configuration.scopeTitle(for: binding)).font(.caption2).foregroundStyle(Theme.secondary)
+                                    if let id = binding.applicationGroupID, let group = configuration.applicationGroups.first(where: { $0.id == id }) { ApplicationGroupIcons(group: group) }
+                                    Text(configuration.scopeTitle(for: binding)).font(.caption2).foregroundStyle(Theme.secondary)
                                 }
                                 if binding.gesture.corner != .none {
                                     Text(binding.gesture.corner.title).font(.caption2).foregroundStyle(Theme.secondary)
                                 }
                             }
                             Spacer(minLength: 0)
-                            if model.configuration.hasConflict(binding) {
+                            if configuration.hasConflict(binding) {
                                 Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).help("Conflicting mappings. Actions are blocked where their app scopes overlap.")
                             } else if !binding.isEnabled {
                                 Image(systemName: "pause.circle").foregroundStyle(Theme.secondary).help("Mapping disabled")
                             }
                         }.padding(.vertical, 6).tag(binding.id)
-                        .graphiteSelection(model.selectedID == binding.id)
+                        .graphiteSelection(selectedID == binding.id)
                         .contextMenu { Button("Delete Gesture", role: .destructive) { model.removeBinding(binding.id) } }
                     }
-                    ForEach(model.visibleStacks.filter { $0.applicationGroupID == scopeID }) { stack in
+                    ForEach(stacks.filter { $0.applicationGroupID == scopeID }) { stack in
                         HStack(spacing: 12) {
                             Image(systemName: "square.stack").frame(width: 22)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(stack.name).fontWeight(.medium)
                                 HStack(spacing: 5) {
-                                    if let id = stack.applicationGroupID, let group = model.configuration.applicationGroups.first(where: { $0.id == id }) { ApplicationGroupIcons(group: group) }
-                                    Text("\(stack.corner.title) · \(model.configuration.scopeTitle(for: stack))").font(.caption).foregroundStyle(Theme.secondary)
+                                    if let id = stack.applicationGroupID, let group = configuration.applicationGroups.first(where: { $0.id == id }) { ApplicationGroupIcons(group: group) }
+                                    Text("\(stack.corner.title) · \(configuration.scopeTitle(for: stack))").font(.caption).foregroundStyle(Theme.secondary)
                                 }
                             }
                             Spacer(minLength: 0)
-                            if stack.isEnabled && (!model.configuration.stackValidationMessages(for: stack).isEmpty || !model.configuration.conflictMessages(for: stack).isEmpty) { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange) }
+                            if stack.isEnabled && (!configuration.stackValidationMessages(for: stack).isEmpty || !configuration.conflictMessages(for: stack).isEmpty) { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange) }
                             else if !stack.isEnabled { Image(systemName: "pause.circle").foregroundStyle(Theme.secondary) }
-                        }.padding(.vertical, 6).tag(stack.id).graphiteSelection(model.selectedStackID == stack.id)
+                        }.padding(.vertical, 6).tag(stack.id).graphiteSelection(selectedStackID == stack.id)
                         .contextMenu { Button("Delete Stack", role: .destructive) { model.removeStack(stack.id) } }
                     }
                 }
@@ -158,7 +166,8 @@ struct BindingEditor: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(binding.gesture.title).font(.system(size: 23, weight: .semibold))
+                        Text(binding.displayName).font(.system(size: 23, weight: .semibold))
+                            .lineLimit(1).truncationMode(.tail).help(binding.displayName)
 
                     }
                     Spacer()
@@ -172,7 +181,16 @@ struct BindingEditor: View {
                     })).toggleStyle(.switch).controlSize(.small).fixedSize()
                     Button(role: .destructive) { confirmingDeletion = true } label: { Image(systemName: "trash") }
                         .buttonStyle(.borderless).help("Delete gesture").accessibilityLabel("Delete gesture")
-                    Button("Practice in Gym") { model.practice(binding.gesture) }.controlSize(.small)
+                    Button("Practice in Gym") { model.practice(binding.gesture) }.controlSize(.small).fixedSize()
+                }
+                HStack {
+                    Text("Name").frame(width: 125, alignment: .leading)
+                    TextField(binding.gesture.title, text: Binding(get: { binding.name }, set: {
+                        binding.name = String($0.prefix(ConfigurationLimits.maximumNameLength))
+                    }))
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Mapping name")
+                    HelpHint("Optional label for the saved mapping and gesture toast. Leave blank to use the gesture name.")
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {

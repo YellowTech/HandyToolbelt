@@ -62,6 +62,33 @@ final class ContractTests: XCTestCase {
         invalid["showsToast"] = .string("false")
         XCTAssertFalse(JSONShapeValidation.errors(.object(invalid), schema: shape, root: ControlContract.value).isEmpty)
     }
+    func testOptionalBindingNameMigrationRoundTripAndBounds() throws {
+        var binding = GestureBinding(gesture: .init(kind: .tap, fingers: 3), action: .init(system: .middleClick))
+        let schema = ControlContract.definitions["Binding"]!
+        var legacy = try JSONValue(encoding: binding).objectValue!
+        legacy.removeValue(forKey: "name")
+        XCTAssertEqual(JSONShapeValidation.errors(.object(legacy), schema: schema, root: ControlContract.value), [])
+        let restored = try JSONValue.object(legacy).decode(GestureBinding.self)
+        XCTAssertEqual(restored.name, "")
+        XCTAssertEqual(restored.displayName, binding.gesture.title)
+        for blank in ["", " \n \t"] {
+            binding.name = blank
+            XCTAssertEqual(binding.displayName, binding.gesture.title)
+            XCTAssertEqual(binding.toastTitle, binding.gesture.title + " · " + binding.action.title)
+        }
+        binding.name = "  Previous tab \n"
+        XCTAssertEqual(binding.displayName, "Previous tab")
+        XCTAssertEqual(binding.toastTitle, "Previous tab")
+        var config = AppConfiguration(); config.bindings = [binding]
+        let roundtrip = try JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(config))
+        XCTAssertEqual(roundtrip.bindings, config.bindings)
+        binding.name = String(repeating: "a", count: ConfigurationLimits.maximumNameLength)
+        XCTAssertEqual(JSONShapeValidation.errors(try JSONValue(encoding: binding), schema: schema, root: ControlContract.value), [])
+        config.bindings = [binding]; XCTAssertTrue(config.validation().errors.isEmpty)
+        binding.name += "a"; config.bindings = [binding]
+        XCTAssertFalse(config.validation().errors.isEmpty)
+        XCTAssertFalse(JSONShapeValidation.errors(try JSONValue(encoding: binding), schema: schema, root: ControlContract.value).isEmpty)
+    }
     func testTemporalTuningAcceptsLegacyAndRejectsInvalidNewValues() throws {
         var tuning = try JSONValue(encoding: GestureTuning()).objectValue!
         tuning.removeValue(forKey: "longTouchDuration"); tuning.removeValue(forKey: "doubleTapInterval")

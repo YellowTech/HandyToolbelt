@@ -61,6 +61,7 @@ public extension AppConfiguration {
         }
         for binding in bindings {
             let label = "Binding \(binding.id)"
+            if binding.name.count > ConfigurationLimits.maximumNameLength { error("\(label): name exceeds \(ConfigurationLimits.maximumNameLength) characters.") }
             let gesture = binding.gesture
             if !gesture.allowedFingerCounts().contains(gesture.fingers) { error("\(label): invalid finger count.") }
             if gesture.corner != .none && gesture.fingers > 4 { error("\(label): corner modifier needs one additional finger (maximum five total).") }

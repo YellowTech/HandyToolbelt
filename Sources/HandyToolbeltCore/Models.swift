@@ -251,6 +251,15 @@ public struct GestureAction: Codable, Equatable, Sendable {
 
 public struct GestureBinding: Codable, Identifiable, Equatable, Sendable {
     public var id: UUID = UUID()
+    public var name: String = ""
+    public var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? gesture.title : trimmed
+    }
+    /// Named mappings need no redundant action suffix in recognition feedback.
+    public var toastTitle: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? gesture.title + " · " + action.title : displayName
+    }
     public var device: InputDevice = .trackpad
     public var gesture: GestureSpec
     public var action: GestureAction
@@ -259,14 +268,16 @@ public struct GestureBinding: Codable, Identifiable, Equatable, Sendable {
     public var keyboardModifiers: KeyboardModifierRequirement = .any
     public var hapticPattern: HapticPattern? = nil
     public var showsToast: Bool = true
-    public init(device: InputDevice = .trackpad, gesture: GestureSpec, action: GestureAction, isEnabled: Bool = true, applicationGroupID: UUID? = nil, keyboardModifiers: KeyboardModifierRequirement = .any) {
+    public init(name: String = "", device: InputDevice = .trackpad, gesture: GestureSpec, action: GestureAction, isEnabled: Bool = true, applicationGroupID: UUID? = nil, keyboardModifiers: KeyboardModifierRequirement = .any) {
+        self.name = name
         self.device = device; self.gesture = gesture; self.action = action; self.isEnabled = isEnabled
         self.keyboardModifiers = keyboardModifiers
         self.applicationGroupID = applicationGroupID
     }
-    private enum CodingKeys: String, CodingKey { case id, device, gesture, action, isEnabled, applicationGroupID, hapticPattern, keyboardModifiers, showsToast }
+    private enum CodingKeys: String, CodingKey { case id, name, device, gesture, action, isEnabled, applicationGroupID, hapticPattern, keyboardModifiers, showsToast }
     public init(from decoder: Decoder) throws {
         let v = try decoder.container(keyedBy: CodingKeys.self)
+        name = try v.decodeIfPresent(String.self, forKey: .name) ?? ""
         id = try v.decode(UUID.self, forKey: .id)
         device = try v.decode(InputDevice.self, forKey: .device)
         gesture = try v.decode(GestureSpec.self, forKey: .gesture)

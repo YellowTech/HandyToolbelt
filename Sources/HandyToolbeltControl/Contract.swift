@@ -369,6 +369,7 @@ public enum ControlContract {
                 "applicationGroupID": uuid,
                 "device": enumeration(InputDevice.allCases.map(\.rawValue)),
                 "gesture": ref("Gesture"),
+                "name": string(max: ConfigurationLimits.maximumNameLength),
                 "hapticPattern": ref("Haptic"),
                 "keyboardModifiers": ref("KeyboardModifierRequirement"),
                 "showsToast": .object(["type": .string("boolean"), "default": .bool(true), "description": .string("Allow this binding to show gesture toasts when global gesture toasts and Overlays are enabled. Show Text actions use their own message.")]),
