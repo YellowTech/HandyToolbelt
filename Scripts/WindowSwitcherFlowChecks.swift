@@ -84,7 +84,7 @@ private final class SnapListener: WindowSnappingMonitoring {
         catalog.windows = [first, second, third]; catalog.focused = first.id
         let model = WindowSwitcherModel(catalog: catalog, keyboard: monitor,
             environment: .init(accessibility: { true }, sessionActive: { true }, frontmostPID: { catalog.frontmost }, startKeyboard: { _ in true }, nativeServices: false),
-            previews: WindowPreviewService(capture: capture), previewSetup: WindowPreviewSetupModel(capture: capture, observeSystem: false))
+            previews: WindowPreviewService(capture: capture, defaults: UserDefaults(suiteName: "WindowSwitcherChecks.\(UUID().uuidString)")!), previewSetup: WindowPreviewSetupModel(capture: capture, observeSystem: false))
         let snapListener = SnapListener(), workspace = NotificationCenter()
         let snapping = WindowSnappingModel(monitor: snapListener, trusted: { true }, eligibility: { true }, sessionIsActive: { true },
             workspaceCenter: workspace, applicationCenter: NotificationCenter(), distributedCenter: NotificationCenter())
@@ -133,14 +133,26 @@ private final class SnapListener: WindowSnappingMonitoring {
         model.cancel()
 
         // Closed targets fail through the production activation coordinator.
+        let beforeFailureCompletions = catalog.completions
         _ = model.show(); catalog.deliver(); model.confirm(); catalog.available = false; catalog.drain()
-        check(model.errorMessage?.contains("no longer available") == true, "Disappearing target surfaces activation failure")
+        check(!model.isShowing && !suspended && catalog.completions == beforeFailureCompletions + 1,
+              "Disappearing target completes once and quietly closes chooser")
+        check(model.show(), "Disappearing target failure releases switching gate")
+        catalog.deliver(); model.cancel()
         catalog.available = true
+
+        // A focus change aborts activation without blocking another invocation.
+        _ = model.show(); catalog.deliver(); model.confirm()
+        catalog.frontmost = 99; catalog.drain()
+        check(!model.isShowing && !suspended, "Focus-change failure leaves chooser dismissed")
+        catalog.frontmost = 10
+        check(model.show(), "Focus-change failure permits immediate retry")
+        catalog.deliver(); model.cancel()
 
         // Cancel supersedes in-flight activation; its callback must not poison a new chooser.
         _ = model.show(); catalog.deliver(); model.confirm(); let effectsBefore = catalog.effects.count
         model.cancel(); check(model.show(), "Cancel clears in-flight switching gate")
-        catalog.drain(); check(model.isShowing && model.errorMessage?.contains("cancelled") != true, "Stale activation callback leaves reopened chooser intact")
+        catalog.drain(); check(model.isShowing, "Stale activation callback leaves reopened chooser intact")
         check(catalog.effects.count == effectsBefore, "Superseded coordinator performs no native effects")
         catalog.deliver(); model.cancel()
 
@@ -161,6 +173,39 @@ private final class SnapListener: WindowSnappingMonitoring {
         let trackpad = AppModel(storage: ConfigurationStore(url: temporary.appendingPathComponent("settings.json")),
             nativeInputEnabled: false, observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { true },
             stackKeyboard: driver, focusedApplication: { ("test.editor", 10, "Editor") })
+        // Real dispatch classifies all switcher failures without losing the error result.
+        let actionExecutor = ActionExecutor(accessibilityTrusted: { true })
+        let windowAction = GestureAction(kind: .system, system: .nextWindow)
+        var dispatchFailure: Error?
+        actionExecutor.execute(windowAction) { if case let .failure(error) = $0 { dispatchFailure = error } }
+        check(dispatchFailure is WindowSwitcherFailure, "Missing Windows module remains a classified failure")
+        let deniedExecutor = ActionExecutor(accessibilityTrusted: { false })
+        deniedExecutor.execute(windowAction) { if case let .failure(error) = $0 { dispatchFailure = error } }
+        check(dispatchFailure is WindowSwitcherFailure && dispatchFailure?.localizedDescription.contains("Accessibility") == true,
+              "Denied window action remains a classified permission failure")
+        actionExecutor.onWindowAction = { _, completion in
+            completion(.failure(ActionExecutor.ActionError.message("Focus changed")))
+        }
+        actionExecutor.execute(windowAction) { if case let .failure(error) = $0 { dispatchFailure = error } }
+        check(dispatchFailure is WindowSwitcherFailure && dispatchFailure?.localizedDescription == "Focus changed",
+              "Window activation failure preserves its error for automation callers")
+        trackpad.handleActionFailure(dispatchFailure!)
+        check(trackpad.errorMessage == nil, "Ordinary gesture dispatch suppresses window failure modal")
+        var failureOptionUps = 0
+        let failureDriver = StackKeyboardDriver(physicalModifiers: []) { key, down, _, modifier in
+            if modifier && key == 58 && !down { failureOptionUps += 1 }
+        }
+        let failureRuntime = GestureStackRuntime(keyboard: failureDriver)
+        failureRuntime.execute = actionExecutor.execute
+        failureRuntime.onError = trackpad.handleActionFailure
+        let failingStack = GestureStack(name: "Failure", device: .trackpad, corner: .topLeft,
+            startActions: [.init(kind: .holdModifiers, modifiers: [.option]), .init(action: windowAction)])
+        failureRuntime.begin(failingStack, deviceID: 1, fingerID: 1, time: 0, tuning: .init(), aspect: 1)
+        check(failureRuntime.stack == nil && failureOptionUps == 1 && trackpad.errorMessage == nil,
+              "Stack window failure ends stack, releases modifiers, and stays nonmodal")
+        trackpad.handleActionFailure(ActionExecutor.ActionError.message("Unrelated failure"))
+        check(trackpad.errorMessage == "Unrelated failure", "Unrelated action errors retain existing presentation")
+        trackpad.errorMessage = nil
         let beforeDisableUps = optionUps, beforeDisableRequests = catalog.requested.count
         trackpad.stackRuntime.begin(stack, deviceID: 1, fingerID: 1, time: 0, tuning: .init(), aspect: 1)
         check(model.isLoading && suspended, "AppModel-owned stack opens chooser with held Option")
@@ -194,7 +239,7 @@ private final class SnapListener: WindowSnappingMonitoring {
         check(visibility.contains(true) && visibility.last == false, "Production host routing finishes resumed")
         // Preview geometry and native capture are independently delayed OS boundaries.
         let previewCatalog = Catalogue(), delayed = DelayedCapture()
-        let previewService = WindowPreviewService(capture: delayed)
+        let previewService = WindowPreviewService(capture: delayed, defaults: UserDefaults(suiteName: "WindowSwitcherChecks.\(UUID().uuidString)")!)
         let previewModel = WindowSwitcherModel(catalog: previewCatalog,
             environment: .init(accessibility: { true }, sessionActive: { true }, frontmostPID: { previewCatalog.frontmost }, startKeyboard: { _ in true }, nativeServices: false),
             previews: previewService, previewSetup: WindowPreviewSetupModel(capture: delayed, observeSystem: false))
@@ -202,6 +247,12 @@ private final class SnapListener: WindowSnappingMonitoring {
         var previewSettings = WindowSwitcherSettings(); previewSettings.isEnabled = true; previewSettings.showsPreviews = true
         previewModel.configure(previewSettings); previewCatalog.deliver()
         previewCatalog.focused = first.id
+        _ = previewModel.show(); previewCatalog.deliver()
+        previewModel.updateVisiblePreviews([second.id])
+        check(delayed.loads.isEmpty && previewCatalog.metadata.isEmpty && !previewService.hasAcknowledgedNotice,
+              "Existing preview preference keeps chooser usable without capture before setup")
+        previewModel.cancel()
+        previewService.noteSuccessfulAccessCheck()
         _ = previewModel.show(); previewCatalog.deliver()
         previewModel.updateVisiblePreviews([second.id])
         check(!previewModel.isLoading && previewModel.selectedID == second.id && !previewCatalog.metadata.isEmpty,
@@ -263,7 +314,8 @@ private final class SnapListener: WindowSnappingMonitoring {
         previewModel.stop()
         let staleCapture = DelayedCapture()
         // Keep each delayed backend attached to the service exercised below.
-        let metadataService = WindowPreviewService(capture: staleCapture)
+        let metadataService = WindowPreviewService(capture: staleCapture, defaults: UserDefaults(suiteName: "WindowSwitcherChecks.\(UUID().uuidString)")!)
+        metadataService.noteSuccessfulAccessCheck()
         var renamed = second; renamed.captureTitle = "Renamed"; renamed.title = "Renamed"
         metadataService.begin(items: [renamed]); metadataService.setVisible([renamed.id])
         metadataService.updateMetadata([enrichedSecond])
@@ -302,7 +354,7 @@ private final class SnapListener: WindowSnappingMonitoring {
         catalog.windows = [first, second, third]; catalog.warm = true
         let warmModel = WindowSwitcherModel(catalog: catalog,
             environment: .init(accessibility: { true }, sessionActive: { true }, frontmostPID: { catalog.frontmost }, startKeyboard: { _ in true }, nativeServices: false),
-            previews: WindowPreviewService(capture: capture), previewSetup: WindowPreviewSetupModel(capture: capture, observeSystem: false))
+            previews: WindowPreviewService(capture: capture, defaults: UserDefaults(suiteName: "WindowSwitcherChecks.\(UUID().uuidString)")!), previewSetup: WindowPreviewSetupModel(capture: capture, observeSystem: false))
         warmModel.configure(settings); catalog.deliver()
         _ = warmModel.show(releaseToConfirm: true)
         check(!warmModel.isLoading && warmModel.selectedID == second.id && catalog.pending.count == 1,

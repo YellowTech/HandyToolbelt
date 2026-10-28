@@ -14,7 +14,7 @@ final class WindowSwitcherModel: ObservableObject {
     @Published private(set) var items: [WindowItem] = []
     @Published private(set) var selectedID: UUID?
     @Published private(set) var message = ""
-    @Published var errorMessage: String?
+    var onPreviewSetupRequested: (() -> Void)?
     var onChooserVisibility: ((Bool) -> Void)?
     let previews: WindowPreviewService
     let previewSetup: WindowPreviewSetupModel
@@ -60,6 +60,7 @@ final class WindowSwitcherModel: ObservableObject {
         keyboard.stop(); catalog.stop(); previews.end()
     }
     func refreshPreviewPermission() { if environment.nativeServices { previews.refreshPermission() } }
+    func requestPreviewSetup() { cancel(); onPreviewSetupRequested?() }
     func openPreviewSetup() {
         guard environment.sessionActive() else { return }
         cancel(); previewSetup.present()
@@ -75,7 +76,7 @@ final class WindowSwitcherModel: ObservableObject {
         guard isShowing, settings.showsPreviews else { return }
         let ordered = items.filter { ids.contains($0.id) }.map(\.id)
         previews.setVisible(ordered.sorted { $0 == selectedID && $1 != selectedID })
-        guard previews.hasPermission else { return }
+        guard previews.canUsePreviews else { return }
         let bounded = Set(ordered.prefix(WindowPreviewPolicy.cacheLimit))
         guard !bounded.isEmpty, metadataVisibleIDs != bounded else { return }
         metadataVisibleIDs = bounded
@@ -243,10 +244,9 @@ final class WindowSwitcherModel: ObservableObject {
         let origin = originPID
         cancel(); switching = true
         let request = requestID
-        catalog.activate(id, expectedProcessID: origin) { [weak self] result in
+        catalog.activate(id, expectedProcessID: origin) { [weak self] _ in
             guard let self, self.requestID == request else { return }
             self.switching = false
-            if case let .failure(error) = result { self.errorMessage = error.localizedDescription }
         }
     }
     func cancel() {

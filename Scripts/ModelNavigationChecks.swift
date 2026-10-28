@@ -219,7 +219,8 @@ struct ModelNavigationChecks {
         let items = (0..<40).map { WindowItem(processID: 42, appName: "Fixture", bundleIdentifier: "fixture", title: "Document \($0)", frame: frame) }
         let candidates = items.enumerated().map { WindowPreviewCandidate(id: UInt32($0.offset + 1), processID: 42, title: $0.element.captureTitle, frame: frame) }
         let backend = PreviewCaptureFixture(candidates: candidates)
-        let previews = WindowPreviewService(capture: backend)
+        let noticeDefaults = UserDefaults(suiteName: "WindowPreviewChecks.\(UUID().uuidString)")!
+        let previews = WindowPreviewService(capture: backend, defaults: noticeDefaults)
         var idlePublications = 0
         let idleObservation = previews.objectWillChange.sink { idlePublications += 1 }
         previews.refreshPermission(); previews.end(); previews.refreshPermission()
@@ -232,6 +233,15 @@ struct ModelNavigationChecks {
         check(idlePublications == 0, "Repeated denied permission refresh publishes nothing")
         backend.allowed = true; previews.refreshPermission()
         idleObservation.cancel()
+        previews.begin(items: items); previews.setVisible([items[0].id])
+        check(!previews.hasAcknowledgedNotice && backend.loads.isEmpty && backend.requests == 0, "A granted Screen Recording permission cannot capture before the direct-capture notice")
+        previews.noteSuccessfulAccessCheck()
+        let relaunched = WindowPreviewService(capture: backend, defaults: noticeDefaults)
+        check(relaunched.hasAcknowledgedNotice && !relaunched.accessVerifiedThisSession && relaunched.canUsePreviews, "Local versioned notice survives relaunch without claiming a current macOS direct grant")
+        noticeDefaults.set(WindowPreviewService.noticeVersion - 1, forKey: WindowPreviewService.noticeKey)
+        let outdated = WindowPreviewService(capture: backend, defaults: noticeDefaults)
+        outdated.begin(items: items); outdated.setVisible([items[0].id])
+        check(!outdated.hasAcknowledgedNotice && backend.loads.isEmpty, "An older explanation requires setup before capture")
         previews.begin(items: items)
         check(backend.loads.isEmpty && backend.captures.isEmpty && backend.requests == 0, "Preview begin never captures or prompts before visible demand")
         previews.setVisible([items[0].id]); backend.completeLoad(); drain()
@@ -258,7 +268,7 @@ struct ModelNavigationChecks {
         backend.allowed = true
         previews.begin(items: items); previews.setVisible([items[0].id]); backend.completeLoad(); drain()
         backend.allowed = false; backend.completeCapture(); drain()
-        check(!previews.hasPermission && previews.images.isEmpty, "Permission revoked during capture clears images before publication")
+        check(!previews.hasPermission && !previews.canUsePreviews && previews.hasAcknowledgedNotice && previews.images.isEmpty, "Permission revocation disables previews and clears images without forgetting the explanation")
         backend.allowed = true
         previews.begin(items: items); previews.setVisible([items[0].id]); backend.completeLoad(); drain()
         for item in items {
@@ -276,6 +286,8 @@ struct ModelNavigationChecks {
         let candidate = WindowPreviewCandidate(id: 5, processID: 42, title: "Test", frame: CGRect(x: 0, y: 0, width: 900, height: 700))
         let backend = PreviewCaptureFixture(candidates: [candidate])
         let setup = WindowPreviewSetupModel(capture: backend, ownProcessID: 99, observeSystem: false)
+        var successfulChecks = 0
+        setup.onSuccessfulCheck = { successfulChecks += 1 }
         setup.applicationBecameActive()
         setup.present(); setup.applicationBecameActive()
         check(backend.requests == 0 && backend.loads.isEmpty && backend.captures.isEmpty, "Opening setup and passive refresh never prompt or capture")
@@ -284,13 +296,17 @@ struct ModelNavigationChecks {
         backend.completeLoad(); drain()
         check(setup.phase == .checking && backend.captures.count == 1, "Enumeration alone never marks preview access ready")
         backend.completeCapture(); drain()
-        check(setup.phase == .ready && !setup.nativeWorkPending, "Ready requires a real successful capture")
+        check(setup.phase == .ready && !setup.nativeWorkPending && successfulChecks == 1, "Only a real successful capture commits the notice acknowledgement")
         setup.dismiss(); backend.allowed = false; setup.present(); setup.start()
         check(backend.requests == 1 && backend.loads.isEmpty && setup.phase == .screenAccess, "Explicit setup requests missing Screen Recording before capture")
         setup.applicationBecameActive()
         check(backend.requests == 1 && backend.loads.isEmpty, "Denied first permission does not proceed or prompt again passively")
         backend.allowed = true; setup.applicationBecameActive()
-        check(backend.loads.count == 1 && setup.phase == .checking, "Returning after first grant automatically advances explicit setup")
+        check(backend.loads.isEmpty && setup.phase == .testPreview, "Returning after Screen Recording grant announces the separate test without capturing")
+        setup.applicationBecameActive()
+        check(backend.loads.isEmpty, "Repeated passive reactivation cannot trigger the direct-capture prompt")
+        setup.checkAgain()
+        check(backend.loads.count == 1 && setup.phase == .checking, "The separate explicit Test Preview action starts direct capture")
         backend.completeLoad(); drain()
         let denied = NSError(domain: "Fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Access declined"])
         backend.completeCapture(error: denied); drain()
@@ -307,7 +323,7 @@ struct ModelNavigationChecks {
         backend.completeLoad(); drain()
         check(backend.captures.isEmpty && setup.phase != .ready && !setup.nativeWorkPending, "Late enumeration cannot start capture or publish Ready in replacement session")
         setup.checkAgain(); backend.completeLoad(); drain(); setup.dismiss(); backend.completeCapture(); drain()
-        check(!setup.isPresented && setup.phase != .ready, "Dismissal prevents a late image from marking hidden setup Ready")
+        check(!setup.isPresented && setup.phase != .ready && successfulChecks == 1, "Dismissal prevents late Ready and does not commit another notice acknowledgement")
         backend.allowed = false; setup.present(); setup.start(); setup.dismiss(); backend.allowed = true; setup.applicationBecameActive()
         check(backend.loads.isEmpty, "Cancelled first-permission flow never advances on later reactivation")
         let timeoutBackend = PreviewCaptureFixture(candidates: [candidate])

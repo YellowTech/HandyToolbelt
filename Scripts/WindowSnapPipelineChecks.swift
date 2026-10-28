@@ -23,6 +23,7 @@ private final class Rig {
     var shown: [CGRect?] = []
     var window = Window(), other = Window()
     var resolution: (() -> Void)?
+    var displays = [(CGRect(x: 0, y: 0, width: 1000, height: 800), CGRect(x: 0, y: 24, width: 1000, height: 776))]
     var lookupOK = true
     var routes: [(Int32?, UInt32?)] = []
     lazy var monitor = WindowSnapMonitor(boundary: .init(
@@ -34,8 +35,11 @@ private final class Rig {
             return .init(access: self.window, frame: self.window.frame,
                          earlierFrame: CGRect(x: 200, y: 200, width: 400, height: 300))
         }, preview: { self.shown.append($0) }),
-        screens: [(CGRect(x: 0, y: 0, width: 1000, height: 800), CGRect(x: 0, y: 24, width: 1000, height: 776))], activePID: 42)
-    init() { monitor.onInteraction = { true } }
+        screens: displays, activePID: 42)
+    init(displays: [(CGRect, CGRect)]? = nil) {
+        if let displays { self.displays = displays }
+        monitor.onInteraction = { true }
+    }
     func send(_ type: CGEventType, _ x: CGFloat = 300, _ y: CGFloat = 220) {
         monitor.capture(type, point: CGPoint(x: x, y: y), targetPID: 42, handlingWindowID: 99)
     }
@@ -50,8 +54,8 @@ private final class Rig {
 @main enum Checks {
     static func main() {
         var count = 0
-        func check(_ label: String, _ body: (Rig) -> Void) {
-            let rig = Rig(); body(rig); count += 1; print("PASS \(label)")
+        func check(_ label: String, displays: [(CGRect, CGRect)]? = nil, _ body: (Rig) -> Void) {
+            let rig = Rig(displays: displays); body(rig); count += 1; print("PASS \(label)")
         }
         check("delayed lookup, coalesced release, first upward drag and clamped titlebar") { r in
             r.send(.leftMouseDown)
@@ -192,6 +196,38 @@ private final class Rig {
             precondition(r.monitor.diagnostics.totalMouseDownCount == 100)
             precondition(r.monitor.diagnostics.completedDrags.count == 8)
             precondition(r.window.writes.count == 100)
+        }
+        check("opt-in recording captures native pipeline and commit readbacks") { r in
+            DebugEventRecorder.shared.setEnabled(true)
+            defer { DebugEventRecorder.shared.setEnabled(false) }
+            r.send(.leftMouseDown); r.run(); r.moveTop(); r.run()
+            r.send(.leftMouseUp, 300, 44); r.run()
+            let data = try! DebugEventRecorder.shared.snapshot()
+            struct Export: Decodable { let schemaVersion: Int; let events: [DebugEvent] }
+            let export = try! JSONDecoder().decode(Export.self, from: data)
+            precondition(export.schemaVersion == 1)
+            let events = export.events
+            precondition(events.contains { $0.category == .snapping && $0.event == "pointer_down" })
+            precondition(events.contains { $0.event == "movement" && $0.fields["confirmed"] == "true" })
+            precondition(events.contains { $0.event == "commit_observation" && $0.fields["stage"] == "readback" })
+            precondition(events.contains { $0.event == "commit_finished" && $0.fields["succeeded"] == "true" })
+            let allowedFields: Set<String> = ["generation", "stage", "reason", "x", "y", "pid", "handling_window", "pointer_window",
+                "original", "earlier", "current", "confirmed", "invalidated", "display", "visible", "requested", "attempts", "frame", "succeeded"]
+            precondition(events.filter { $0.category == .snapping }.allSatisfy { Set($0.fields.keys).isSubset(of: allowedFields) })
+        }
+        for origin in [CGPoint(x: -1400, y: 0), CGPoint(x: 1000, y: 0), CGPoint(x: 0, y: -900), CGPoint(x: 0, y: 800)] {
+            let screen = CGRect(origin: origin, size: CGSize(width: 1400, height: 900))
+            let visible = CGRect(x: origin.x, y: origin.y + 24, width: 1400, height: 876)
+            check("external display at \(origin.x),\(origin.y) applies global point frame", displays: [(screen, visible)]) { r in
+                r.window.frame = CGRect(x: origin.x + 200, y: origin.y + 200, width: 400, height: 300)
+                let x = origin.x + 300
+                r.send(.leftMouseDown, x, origin.y + 220); r.run()
+                r.window.frame.origin.y = visible.minY
+                r.send(.leftMouseDragged, x, visible.minY + 20); r.run()
+                r.send(.leftMouseUp, x, visible.minY + 20); r.run(); r.flushPreview()
+                precondition(r.window.frame == visible && r.diagnostics.commitSucceeded == true)
+                precondition(r.window.writes == ["size", "position"])
+            }
         }
         print("Window snapping production pipeline: \(count) checks passed")
     }

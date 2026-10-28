@@ -17,6 +17,7 @@ final class StackKeyboardDriver: StackKeyboardDriving {
     private var pressedKeys: [CGKeyCode: CGEventFlags] = [:]
     var onUnavailable: (() -> Void)?
     var onPhysicalModifiersChanged: (() -> Void)?
+    var onPhysicalKeyDown: (() -> Void)?
     private var emitOverride: ((CGKeyCode, Bool, CGEventFlags, Bool) throws -> Void)?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
@@ -33,15 +34,15 @@ final class StackKeyboardDriver: StackKeyboardDriving {
         let rightKeys: [CGKeyCode: CGKeyCode] = [59:62, 58:61, 56:60, 55:54]
         for (modifier, key, _) in StackKeyboardDriver.keys where CGEventSource.keyState(.hidSystemState, key: key) || CGEventSource.keyState(.hidSystemState, key: rightKeys[key]!) { physical.insert(modifier) }
         tap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap, options: .defaultTap,
-            eventsOfInterest: 1 << CGEventType.flagsChanged.rawValue, callback: { _, type, event, context in
+            eventsOfInterest: (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue), callback: { _, type, event, context in
                 guard let context else { return Unmanaged.passUnretained(event) }
                 let driver = Unmanaged<StackKeyboardDriver>.fromOpaque(context).takeUnretainedValue()
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     driver.onUnavailable?()
                     if let tap = driver.tap { CGEvent.tapEnable(tap: tap, enable: true) }
-                } else if event.getIntegerValueField(.eventSourceUserData) != StackKeyboardDriver.eventMarker && event.getIntegerValueField(.eventSourceUserData) != ActionExecutor.eventMarker {
-                    let key = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-                    event.flags = driver.physicalTransition(key: key, flags: event.flags)
+                } else {
+                    event.flags = driver.routeKeyboardEvent(type: type, key: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
+                        flags: event.flags, marker: event.getIntegerValueField(.eventSourceUserData))
                 }
                 return Unmanaged.passUnretained(event)
             }, userInfo: Unmanaged.passUnretained(self).toOpaque())
@@ -50,6 +51,18 @@ final class StackKeyboardDriver: StackKeyboardDriving {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
         }
+    }
+    /// Shared by the native callback and hardware-free routing checks. Key identity
+    /// is used only to filter modifier events and never reaches diagnostics.
+    @discardableResult func routeKeyboardEvent(type: CGEventType, key: CGKeyCode, flags: CGEventFlags, marker: Int64) -> CGEventFlags {
+        guard marker != Self.eventMarker, marker != ActionExecutor.eventMarker else { return flags }
+        if type == .keyDown {
+            if ![54, 55, 56, 57, 58, 59, 60, 61, 62, 63].contains(key) { onPhysicalKeyDown?() }
+        } else if type == .flagsChanged {
+            DebugEventRecorder.shared.record(category: .keyboard, event: "modifier_transition")
+            return physicalTransition(key: key, flags: flags)
+        }
+        return flags
     }
     /// Hardware transitions update matching independently, while the delivered
     /// event retains stack-owned flags until the shared ending path releases them.
@@ -176,6 +189,7 @@ final class GestureStackRuntime {
     }
     func begin(_ value: GestureStack, deviceID: UInt64, fingerID: Int, time: Double, tuning: GestureTuning, aspect: Double) {
         guard stack == nil else { return }
+        DebugEventRecorder.shared.record(category: .stack, event: "begin")
         generation = UUID(); stack = value; self.deviceID = deviceID; self.fingerID = fingerID; lastFrame = time
         recognizer = GestureRecognizer(); recognizer.tuning = tuning; recognizer.surfaceAspectRatio = aspect
         recognizer.usesTrackpadEdgeDeadzone = value.device == .trackpad
@@ -224,6 +238,7 @@ final class GestureStackRuntime {
     @discardableResult private func handle(_ gesture: GestureSpec) -> Bool {
         guard let stack else { return false }
         let matches = stack.bindings.filter { $0.isEnabled && $0.gesture == gesture && $0.keyboardModifiers.matches(keyboard.physicalModifiers) }
+        DebugEventRecorder.shared.record(category: .stack, event: "child_gesture", fields: ["kind": gesture.kind.rawValue, "matched": String(matches.count == 1)])
         guard matches.count == 1, let binding = matches.first else { return false }
         guard queue.count + binding.actions.count <= 64 else { end(); return false }
         queue += binding.actions.map { GestureStackAction(action: $0) }; drain(); return true
@@ -247,6 +262,7 @@ final class GestureStackRuntime {
         cancelTemporalGestures()
         cancelPresses()
         guard let ending = stack else { return }
+        DebugEventRecorder.shared.record(category: .stack, event: "end")
         generation = UUID(); stack = nil; deviceID = nil; fingerID = nil; queue = []; busy = false
         keyboard.releaseAll()
         onEnd?()

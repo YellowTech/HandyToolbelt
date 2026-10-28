@@ -11,7 +11,7 @@ struct WindowPreviewSetupView: View {
             Text("Window previews").font(.title2.weight(.semibold))
             VStack(alignment: .leading, spacing: 16) {
                 step("1", title: "Allow Screen & System Audio Recording", detail: "Enable HandyToolbelt in macOS Screen & System Audio Recording settings.", complete: model.hasScreenAccess)
-                step("2", title: "Test one window preview", detail: "macOS may ask to bypass its private window picker. Allow this so the switcher can preview multiple windows.", complete: model.phase == .ready)
+                step("2", title: "Test one window preview", detail: "macOS may ask to “bypass the system private window picker” and directly access screen and audio. This lets HandyToolbelt request window images for the chooser. It captures images only, never audio.", complete: model.phase == .ready)
             }
             Divider()
             status
@@ -60,10 +60,13 @@ struct WindowPreviewSetupView: View {
     @ViewBuilder private var status: some View {
         switch model.phase {
         case .introduction:
-            Text("The test captures one window from another app and immediately discards the image.")
+            Text("Test Preview captures one window from another app and immediately discards the image. macOS may ask again later; HandyToolbelt cannot predict when. You can cancel and keep switching with app icons.")
                 .font(.callout).foregroundStyle(Theme.secondary)
         case .screenAccess:
-            Text("Allow access, then return here to continue. If access is already enabled, restart HandyToolbelt and check again.")
+            Text("Allow access, then return here for the separate Test Preview step. If access is already enabled, restart HandyToolbelt and check again.")
+                .font(.callout).foregroundStyle(Theme.secondary)
+        case .testPreview:
+            Text("Screen Recording is enabled. Select Test Preview when you are ready for the separate macOS confirmation described above.")
                 .font(.callout).foregroundStyle(Theme.secondary)
         case .checking:
             HStack(spacing: 10) {
@@ -82,7 +85,7 @@ struct WindowPreviewSetupView: View {
     }
     private var primaryTitle: String {
         if model.nativeWorkPending { return "Checking…" }
-        return model.phase == .introduction ? (model.hasScreenAccess ? "Test Preview" : "Start Setup") : "Check Again"
+        return model.phase == .introduction ? (model.hasScreenAccess ? "Test Preview" : "Start Setup") : (model.phase == .testPreview ? "Test Preview" : "Check Again")
     }
     private func primaryAction() {
         if model.phase == .introduction { model.start() } else { model.checkAgain() }

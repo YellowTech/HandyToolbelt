@@ -18,7 +18,7 @@ final class AppModel: ObservableObject {
             reconcileStackSelection()
             cancelPendingGestures()
             stackRuntime.end()
-            if !configuration.trackpadModuleEnabled { stackKeyboard.stopMonitoring() }
+            if !configuration.trackpadModuleEnabled && !DebugEventRecorder.shared.isEnabled { stackKeyboard.stopMonitoring() }
             recognizers.removeAll()
             haptics.cancel()
             if !configuration.trackpadModuleEnabled { cancelVisualFeedback() }
@@ -91,6 +91,7 @@ final class AppModel: ObservableObject {
         let runtime = GestureStackRuntime(keyboard: stackKeyboard)
         stackKeyboard.onUnavailable = { [weak self, weak runtime] in self?.cancelPendingGestures(); runtime?.end() }
         stackKeyboard.onPhysicalModifiersChanged = { [weak self] in self?.cancelPendingGestures() }
+        stackKeyboard.onPhysicalKeyDown = { [weak self] in self?.physicalKeyDown() }
         runtime.execute = { [weak self] action, completion in
             guard let self else { return }
             if action.kind == .automation, let id = action.automationID {
@@ -106,9 +107,14 @@ final class AppModel: ObservableObject {
             self.recognizers.removeAll()
             self.cancelVisualFeedback()
         }
-        runtime.onError = { [weak self] in self?.errorMessage = $0.localizedDescription }
+        runtime.onError = { [weak self] in self?.handleActionFailure($0) }
         return runtime
     }()
+    func handleActionFailure(_ error: Error) {
+        guard !(error is WindowSwitcherFailure) else { return }
+        errorMessage = error.localizedDescription
+    }
+
     private var liftRequired = Set<UInt64>()
     private var stackTouchedDevices = Set<UInt64>()
     @Published var selectedDevice: InputDevice = .trackpad { didSet { if selectedDevice != oldValue { cancelPendingGestures() } } }
@@ -184,6 +190,19 @@ final class AppModel: ObservableObject {
     }
     private var nativePresses = NativePressArbiter<PressSnapshot>()
     private var pressGeneration = UUID()
+    private var typingSuppression = TypingSuppression()
+
+    func physicalKeyDown(at time: Double = ProcessInfo.processInfo.systemUptime) {
+        typingSuppression.keyDown(at: time)
+        for (id, recognizer) in recognizers where !recognizer.contacts.isEmpty { typingSuppression.requireLift(deviceID: id) }
+        for id in stackTouchedDevices { typingSuppression.requireLift(deviceID: id) }
+        DebugEventRecorder.shared.record(category: .keyboard, event: "physical_key_down")
+        DebugEventRecorder.shared.record(category: .suppression, event: "typing_cooldown")
+        cancelPendingGestures()
+        cancelVisualFeedback()
+        stackRuntime.end()
+        recognizers.removeAll()
+    }
 
     private func cancelPendingGestures() {
         pressGeneration = UUID(); nativePresses.cancel(); stackRuntime.cancelPresses()
@@ -226,11 +245,12 @@ final class AppModel: ObservableObject {
     /// Explicit time keeps idle-expiry and lifecycle checks independent of hardware.
     func finishTemporalGestures(for deviceID: UInt64, at time: Double) {
         temporalDeadlines.removeValue(forKey: deviceID)?.work.cancel()
-        guard !synchronizeFocusedApplication(), inputSessionAvailable, configuration.trackpadModuleEnabled,
+        guard !typingSuppression.coolingDown(at: time), !synchronizeFocusedApplication(), inputSessionAvailable, configuration.trackpadModuleEnabled,
               stackRuntime.stack == nil, let device = devices.first(where: { $0.id == deviceID }),
               var recognizer = recognizers[deviceID] else { return }
         let generation = temporalGeneration, sequence = recognizer.feedbackSequence
         let events = recognizer.advanceTime(to: time)
+        if recognizer.feedbackSequence != sequence { DebugEventRecorder.shared.feedback(recognizer.feedback) }
         recognizers[deviceID] = recognizer
         scheduleTemporalDeadline(for: deviceID)
         if gymActive && previewVisible && device.kind == selectedDevice && recognizer.feedbackSequence != sequence {
@@ -300,6 +320,25 @@ final class AppModel: ObservableObject {
         selectedID = configuration.bindings.first?.id
         selectedGroupID = configuration.applicationGroups.first?.id
         synchronizeFocusedApplication()
+        DebugEventRecorder.shared.contextProvider = { [weak self] in
+            guard let self else { return [:] }
+            let tuning = self.recognitionTuning(for: self.selectedDevice)
+            return ["accessibility": String(self.hasAccessibility), "session_active": String(self.inputSessionAvailable),
+                "gestures_enabled": String(self.configuration.trackpadModuleEnabled), "snapping_enabled": String(self.configuration.snappingModuleEnabled),
+                "selected_device_kind": self.selectedDevice.rawValue, "typing_cooldown_seconds": "0.5",
+                "tap_duration": String(tuning.tapDuration), "tap_travel": String(tuning.tapTravel),
+                "long_touch_duration": String(tuning.longTouchDuration), "double_tap_interval": String(tuning.doubleTapInterval),
+                "anchor_hold": String(tuning.anchorHold), "corner_hold": String(tuning.cornerHold), "corner_size": String(tuning.cornerSize),
+                "swipe_travel": String(tuning.swipeTravel), "hand_angle_degrees": String(tuning.handAngleDegrees),
+                "tip_separation": String(tuning.tipSeparation), "tip_max_separation": String(tuning.tipMaxSeparation), "edge_deadzone": String(tuning.tipEdgeDeadzone)]
+        }
+        DebugEventRecorder.shared.onEnabledChanged = { [weak self] in
+            guard let self else { return }
+            self.refreshPermissions()
+            DebugEventRecorder.shared.record(category: .suppression, event: "input_context", fields: [
+                "accessibility": String(self.hasAccessibility), "session_active": String(self.inputSessionAvailable),
+                "gestures_enabled": String(self.configuration.trackpadModuleEnabled), "snapping_enabled": String(self.configuration.snappingModuleEnabled)])
+        }
     }
 
     var visibleStacks: [GestureStack] {
@@ -341,7 +380,7 @@ final class AppModel: ObservableObject {
         !gymActive && frontmostBundleID != nil && frontmostBundleID != Bundle.main.bundleIdentifier
     }
     var canRunActions: Bool {
-        isRunning && configuration.trackpadModuleEnabled && !windowChooserVisible && stackRuntime.stack == nil && productionFocusAllowsActions && hasAccessibility && sessionActive && isAwake
+        !typingSuppression.coolingDown(at: ProcessInfo.processInfo.systemUptime) && isRunning && configuration.trackpadModuleEnabled && !windowChooserVisible && stackRuntime.stack == nil && productionFocusAllowsActions && hasAccessibility && sessionActive && isAwake
     }
     var gymHasChanges: Bool { gymDrafts[selectedDevice].map { $0.validated != configuration.tuning(for: selectedDevice) } ?? false }
     var devicesWithGymChanges: [InputDevice] {
@@ -732,7 +771,8 @@ final class AppModel: ObservableObject {
             pressGeneration = UUID(); nativePresses.cancel(); stackRuntime.cancelPresses()
             stackRuntime.end(); stackKeyboard.stopMonitoring()
         }
-        else if nativeInputEnabled && configuration.trackpadModuleEnabled { stackKeyboard.startMonitoring() }
+        else if nativeInputEnabled && (configuration.trackpadModuleEnabled || DebugEventRecorder.shared.isEnabled) { stackKeyboard.startMonitoring() }
+        else { stackKeyboard.stopMonitoring() }
         let available: Bool
         if hasAccessibility && inputSessionAvailable && nativeInputEnabled { available = clickMonitor.start() }
         else { clickMonitor.stop(); available = false }
@@ -908,6 +948,28 @@ final class AppModel: ObservableObject {
     // Kept internal so headless lifecycle checks can replay raw frames without
     // constructing the native input driver or dispatching a configured action.
     func receive(_ device: TouchDevice, _ points: [Contact], _ time: Double) {
+        DebugEventRecorder.shared.touch(deviceID: device.id, contacts: points, kind: device.kind, aspectRatio: device.aspectRatio, frameTime: time)
+        // Session suspension must still release stack-owned keys, even when the
+        // typing policy is waiting for a full lift. Reject queued/invalid frames
+        // before they can clear either barrier or update the visualization.
+        guard inputSessionAvailable else { stackRuntime.end(); return }
+        guard time.isFinite, time >= focusChangedAt, time >= (lastFrame[device.id] ?? -.infinity) else {
+            DebugEventRecorder.shared.record(category: .suppression, event: "stale_or_invalid_touch_frame")
+            if stackRuntime.stack != nil { stackRuntime.end() }
+            return
+        }
+        lastFrame[device.id] = time
+        if typingSuppression.suppresses(deviceID: device.id, hasContacts: !points.isEmpty, at: time) {
+            recognizers[device.id] = nil
+            if points.isEmpty { liftRequired.remove(device.id); stackTouchedDevices.remove(device.id) }
+            if previewVisible && device.kind == selectedDevice {
+                touchVisualization.submit(GymSnapshot(contacts: points), deviceID: device.id, at: time)
+                if contacts.map(\.id) != points.map(\.id) { contacts = points }
+                if activeCorner != .none { activeCorner = .none }
+                if modifierFinger != nil { modifierFinger = nil }
+            }
+            return
+        }
         nativePresses.validate { $0.contacts.accepts(deviceID: device.id, contacts: points, at: time) }
 
         if stackRuntime.stack != nil {
@@ -919,7 +981,7 @@ final class AppModel: ObservableObject {
         if liftRequired.contains(device.id) {
             // A stale queued lift, invalid timestamp, or suspended callback must
             // not clear the barrier for contacts still held after resuming.
-            if points.isEmpty, inputSessionAvailable, time.isFinite, time >= focusChangedAt {
+            if points.isEmpty, inputSessionAvailable, time.isFinite, time >= focusChangedAt, time >= (lastFrame[device.id] ?? -.infinity) {
                 liftRequired.remove(device.id)
                 recognizers[device.id] = nil
                 _ = focusContext.acceptsFrame(deviceID: device.id, hasContacts: false)
@@ -941,6 +1003,7 @@ final class AppModel: ObservableObject {
         let pressed = nativeInputEnabled && (0...2).contains { CGEventSource.buttonState(.combinedSessionState, button: CGMouseButton(rawValue: UInt32($0))!) }
         let events = recognizer.process(points, at: time, enabledCorners: corners, physicalButtonDown: pressed,
             eligibleTemporalSpecs: recognitionTemporalSpecs(for: device.kind))
+        if recognizer.feedbackSequence != previousSequence { DebugEventRecorder.shared.feedback(recognizer.feedback) }
         recognizers[device.id] = recognizer
         scheduleTemporalDeadline(for: device.id)
         nativePresses.validate { press in
@@ -998,7 +1061,7 @@ final class AppModel: ObservableObject {
 
     // Real native events only. Raw contact pressure is reserved for visualization.
     func pressureChanged(stage: Int, at time: Double) {
-        guard isRunning, isAwake, sessionActive, configuration.trackpadModuleEnabled else { cancelPendingGestures(); return }
+        guard !typingSuppression.coolingDown(at: time), isRunning, isAwake, sessionActive, configuration.trackpadModuleEnabled else { cancelPendingGestures(); return }
         guard !synchronizeFocusedApplication() else { return }
         if stackRuntime.stack != nil {
             if stackTouchedDevices.count == 1 { stackRuntime.pressure(stage: stage, at: time) }
@@ -1039,6 +1102,8 @@ final class AppModel: ObservableObject {
 
     @discardableResult func physicalClick(button: Int64 = 0, at time: Double? = nil) -> Bool {
         let now = time ?? ProcessInfo.processInfo.systemUptime
+        DebugEventRecorder.shared.record(category: .click, event: "physical_click")
+        guard !typingSuppression.coolingDown(at: now) else { cancelPendingGestures(); return false }
         // Even a mouse-down with no remaining contacts cancels a waiting tap.
         // This preserves an emitted long touch's suppression of a later click.
         cancelTemporalGestures()
@@ -1094,8 +1159,11 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult private func handle(_ gesture: GestureSpec, from device: InputDevice, supportsHaptics: Bool, nativeGeneration: UUID? = nil, temporalGeneration: UUID? = nil) -> Bool {
+        DebugEventRecorder.shared.record(category: .recognition, event: "gesture", fields: ["kind": gesture.kind.rawValue, "fingers": String(gesture.fingers), "corner": gesture.corner.rawValue])
+        guard !typingSuppression.coolingDown(at: ProcessInfo.processInfo.systemUptime) else { return false }
         guard !synchronizeFocusedApplication(), temporalGeneration.map({ self.temporalGeneration == $0 }) ?? true else { return false }
         let binding = configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: frontmostBundleID, keyboardModifiers: stackKeyboard.physicalModifiers)
+        DebugEventRecorder.shared.record(category: .recognition, event: "binding_match", fields: ["matched": String(binding != nil)])
         if device == selectedDevice {
             lastGesture = gymActive ? gesture.title : (binding?.displayName ?? gesture.title)
             lastDetail = gesture.corner == .none ? (binding?.action.title ?? "No matching action") : "\(gesture.corner.title) · \(binding?.action.title ?? "No matching action")"
@@ -1134,6 +1202,7 @@ final class AppModel: ObservableObject {
             guard nativeGeneration.map({ self.pressGeneration == $0 }) ?? true,
                           temporalGeneration.map({ self.temporalGeneration == $0 }) ?? true, self.feedbackGeneration == feedbackGeneration, self.canRunActions, self.focusContext.generation == focusGeneration,
                   self.configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: self.frontmostBundleID, keyboardModifiers: self.stackKeyboard.physicalModifiers) == binding else { return }
+            DebugEventRecorder.shared.record(category: .recognition, event: "action_dispatch")
             if supportsHaptics { self.haptics.play(binding.hapticPattern ?? self.configuration.hapticPattern) }
             if self.canShowGestureToast && binding.showsToast && binding.action.kind != .showText {
                 self.onToast?(binding.toastTitle)
@@ -1141,7 +1210,7 @@ final class AppModel: ObservableObject {
             let complete: (Result<String, Error>) -> Void = { [weak self] result in
                 switch result {
                 case let .success(message): self?.lastDetail = message
-                case let .failure(error): self?.errorMessage = error.localizedDescription
+                case let .failure(error): self?.handleActionFailure(error)
                 }
             }
             if binding.action.kind == .automation, let id = binding.action.automationID {

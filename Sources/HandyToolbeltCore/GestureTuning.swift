@@ -11,7 +11,7 @@ public struct GestureTuning: Codable, Equatable, Sendable {
     public var handAngleDegrees = 0.0
     public var tipSeparation = 0.055
     public var tipMaxSeparation = 0.45
-    public var tipEdgeDeadzone = 0.04
+    public var tipEdgeDeadzone = 0.06
     public var cornerSize = 0.22
     public init() {}
 
@@ -64,7 +64,7 @@ public struct GestureTuning: Codable, Equatable, Sendable {
         result.handAngleDegrees = clamp(handAngleDegrees, Self.bounds["handAngleDegrees"]!, 0)
         result.tipSeparation = clamp(tipSeparation, Self.bounds["tipSeparation"]!, 0.055)
         result.tipMaxSeparation = clamp(tipMaxSeparation, Self.bounds["tipMaxSeparation"]!, 0.45)
-        result.tipEdgeDeadzone = clamp(tipEdgeDeadzone, Self.bounds["tipEdgeDeadzone"]!, 0.04)
+        result.tipEdgeDeadzone = clamp(tipEdgeDeadzone, Self.bounds["tipEdgeDeadzone"]!, 0.06)
         result.cornerSize = clamp(cornerSize, Self.bounds["cornerSize"]!, 0.22)
         return result
     }

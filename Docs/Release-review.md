@@ -1,5 +1,29 @@
 # HandyToolbelt release review
 
+## Wider tip-tap edge exclusion — 0.30.2 (70), 2026-10-28
+
+The default resting-finger edge deadzone increases from 4% to 6%. A regression uses rounded geometry from a reported near-rim accidental tip-tap: the old threshold accepts it, the new default rejects it, and a slightly inset anchor still works. Existing saved tuning remains respected; the user's current trackpad setting is explicitly updated to 6% during this installation.
+
+The full unit/contract suite and release build passed, including the new near-rim regression. Installed-app inspection confirmed 6.0% in Gesture Gym, with no unapplied changes. Both executables match the signed candidate, one 0.30.2 process is running, and the only saved configuration change is the requested trackpad deadzone. Rollback: `.build/install-backups/2026-10-28T20-01-19Z`.
+
+## Nonmodal switcher failures — 0.30.1 (69), 2026-10-28
+
+The chooser no longer publishes activation failures into the app's shared alert. Failed or cancelled focus attempts leave it dismissed and release the switching gate for the next invocation. Window system actions carry a typed failure through gesture and stack dispatch, which suppresses only their modal presentation while preserving failure results for CLI/automation and the existing activation diagnostics. Stack failure cleanup still releases owned modifiers. Settings recovery and unrelated errors keep their existing presentation.
+
+Passed 68 switcher-flow checks, including failed-target and focus-change retry, permission/module failure classification, and stack modifier release. Release compilation and strict signature verification passed. Installed and restarted 0.30.1; the app window opens normally, both executables match the candidate, and the existing signing requirement and saved settings are preserved. Rollback: `.build/install-backups/2026-10-28T17-11-50Z`.
+
+## Typing protection and diagnostic recording — 0.30.0 (68), 2026-10-28
+
+Physical non-modifier key presses suppress gestures for 0.5 seconds, cancel pending recognition, and release active stacks. HandyToolbelt-generated keys and modifier-only transitions do not start the cooldown. Contacts held during typing must lift before rearming; stale, invalid, and suspended frames cannot clear that barrier.
+
+Global Settings adds a session-only debug recorder, off by default. A bounded in-memory ring exports the last 15 seconds as local JSON after an explicit save. Exports include touch geometry, generic keyboard events, recognition decisions, sanitized tuning, and snapping coordinates, AX result codes, and frame readbacks. They exclude typed characters/key codes, app or window names, action contents, screenshots, and device names. Disabling clears the buffer; export freezes the interval before opening the save panel.
+
+Preview capture now requires a successful explicit setup check and a versioned local acknowledgement of the direct-window permission explanation. Returning after the Screen Recording grant stops at Test Preview. Until setup completes, the chooser retains app-icon rows with an Open Setup action. The local acknowledgement does not claim a queryable or permanent macOS direct-capture grant.
+
+The external-display failure remains unconfirmed. Four production-pipeline fixtures pass with displays left/right/above/below the primary display. The new trace records resolution, movement qualification, requested/readback frames, AX failures, and cancellation to diagnose a real failing drag. A fixture initially failed because it added a display after constructing the monitor; injecting screens before construction corrected the test, with no speculative geometry change. The temporal harness now uses a fresh model when moving from virtual timestamps to real-clock checks instead of rewinding an input session.
+
+Validation passed: unit/contract tests, typing/recorder integration checks, 417 model/navigation checks and 418 legacy-model checks, 59 switcher-flow checks, 27 snapping-pipeline checks, 58 stack-runtime checks, 48 temporal-gesture checks, 52 native-click checks, release compilation, and strict signature verification. Installed-app review confirmed the setup explanation, successful explicit preview capture, recorder off by default, local JSON export, and disabled saving after recording was turned off. The exported sample uses relative timestamps within 15 seconds and only the expected diagnostic fields. Both installed executables match the signed candidate; the signing requirement and saved configuration are preserved, with one 0.30.0 process running. Rollback: `.build/install-backups/2026-10-28T16-41-33Z`.
+
 ## Folder interaction and change review — 0.29.2 (67), 2026-10-27
 
 The stack disclosure now covers the arrow and folder with a 46 × 44 pt target and an accessible expanded/collapsed value. Review introduced typed sidebar identities, kept Add Gesture independent of folder selection, preserved selection when deleting unrelated mappings, and applied the existing name limit to folder names.

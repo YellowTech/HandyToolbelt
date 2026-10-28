@@ -245,11 +245,13 @@ public struct WindowSnapApplication {
     }
     public enum Result { case pending, succeeded, failed }
     /// Two spaced matches establish stability; a rollback triggers at most three applications.
-    public mutating func advance(window: WindowSnapWindowAccess, isCurrent: () -> Bool) -> Result {
+    public mutating func advance(window: WindowSnapWindowAccess, diagnostic: (String, CGRect?) -> Void = { _, _ in }, isCurrent: () -> Bool) -> Result {
         guard isCurrent(), window.isEligibleAndActive(), isCurrent(), let frame = window.readFrame(), isCurrent() else { return .failed }
+        diagnostic("readback", frame)
         if let original = awaitingSizeFrom {
             awaitingSizeFrom = nil
             guard abs(frame.width-target.width) < 2, abs(frame.height-target.height) < 2 else {
+                diagnostic("size_unmatched_restore", frame)
                 if isCurrent(), window.isEligibleAndActive(), isCurrent() { _ = window.setSize(original.size) }
                 return .failed
             }
@@ -265,6 +267,7 @@ public struct WindowSnapApplication {
         attempts += 1
         guard window.setSize(target.size), isCurrent(), window.isEligibleAndActive(), isCurrent(),
               let resized = window.readFrame(), isCurrent() else { return .failed }
+        diagnostic("after_size", resized)
         guard abs(resized.width-target.width) < 2, abs(resized.height-target.height) < 2 else {
             // AX success may precede the owner's layout update. Allow one spaced
             // observation before treating a mismatch as a genuine size constraint.

@@ -17,7 +17,7 @@ import HandyToolbeltCore
         var focus: String? = "com.example.Editor"
         var access = true
         let keyboard = StackKeyboardDriver(physicalModifiers: [], emit: { _, _, _, _ in })
-        let model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("config.json")), nativeInputEnabled: false,
+        var model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("config.json")), nativeInputEnabled: false,
             observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, stackKeyboard: keyboard,
             focusedApplication: { (focus, 100, "Test") })
         var output: [String] = []
@@ -167,6 +167,16 @@ import HandyToolbeltCore
         check(output == ["tip"], "Single tip-tap stays immediate without an enabled matching double")
 
         model.configuration.bindings = [tipSingle, tipDouble]
+        // The virtual scenarios advanced timestamps into the future. Use a fresh
+        // input session for real-clock deadlines instead of rewinding its clock.
+        let scheduledConfiguration = model.configuration
+        model.stop()
+        model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("scheduled-config.json")), nativeInputEnabled: false,
+            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, stackKeyboard: keyboard,
+            focusedApplication: { (focus, 100, "Test") })
+        model.configuration = scheduledConfiguration
+        model.onShowText = { output.append($0.text) }
+        model.start(); model.devices = [device, other]
         time = ProcessInfo.processInfo.systemUptime + 0.01
         model.receive(device, [], time); output = []
         oneTip(); drain(0.65)

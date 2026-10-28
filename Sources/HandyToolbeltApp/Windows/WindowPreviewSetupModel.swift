@@ -6,7 +6,7 @@ import HandyToolbeltCore
 /// direct-window alert is not. Only a real capture can confirm the current check.
 final class WindowPreviewSetupModel: ObservableObject {
     enum Phase: Equatable {
-        case introduction, screenAccess, checking, ready, problem(String)
+        case introduction, screenAccess, testPreview, checking, ready, problem(String)
     }
     @Published private(set) var isPresented = false
     @Published private(set) var phase: Phase = .introduction
@@ -74,7 +74,7 @@ final class WindowPreviewSetupModel: ObservableObject {
         guard isPresented, presentationIsVisible() else { return }
         hasScreenAccess = capture.hasPermission()
         if continueAfterPermission, hasScreenAccess, nativeRequest == nil {
-            continueAfterPermission = false; testCapture()
+            continueAfterPermission = false; phase = .testPreview
         }
     }
     func checkAgain() {

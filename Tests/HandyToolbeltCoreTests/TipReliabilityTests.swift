@@ -22,6 +22,26 @@ import Testing
     }
 }
 
+@Test func nearRimPalmContactCannotArmTipWithDefaultDeadzone() {
+    // Rounded contact geometry from a reported accidental tip-tap. The anchor
+    // sits just beyond the old 4% rim; an intentional inset anchor still works.
+    func tip(anchorX: Double, tuning: GestureTuning) -> [GestureSpec] {
+        var r = GestureRecognizer()
+        r.tuning = tuning
+        r.surfaceAspectRatio = 1.625
+        let held = [Contact(id: 1, x: anchorX, y: 0.343)]
+        _ = r.process(held, at: 0)
+        _ = r.process(held, at: 0.2)
+        _ = r.process(held + [.init(id: 2, x: 0.549, y: 0.638)], at: 0.3)
+        return r.process(held, at: 0.43)
+    }
+    var previous = GestureTuning()
+    previous.tipEdgeDeadzone = 0.04
+    #expect(tip(anchorX: 0.952, tuning: previous) == [.init(kind: .tipTapLeft)])
+    #expect(tip(anchorX: 0.952, tuning: .init()).isEmpty)
+    #expect(tip(anchorX: 0.93, tuning: .init()) == [.init(kind: .tipTapLeft)])
+}
+
 @Test func enabledDoubleTipDisambiguatesAndFlushesSingle() {
     for count in 1...3 {
         for left in [false, true] {

@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loginLaunch = loginLaunch || LoginLaunchPolicy.isLoginItemLaunch(event: NSAppleEventManager.shared().currentAppleEvent)
         if loginLaunch { MainWindowPresence.shared.suppressRestoredLaunchWindow() }
         Logger(subsystem: "local.HandyToolbelt", category: "Relaunch").notice("Application finished launching")
+        host.onRevealMainWindow = { [weak self] in self?.mainWindow.open() }
         statusItem = StatusItemController(host: host) { [weak self] section in
             guard let self else { return }
             self.host.section = section

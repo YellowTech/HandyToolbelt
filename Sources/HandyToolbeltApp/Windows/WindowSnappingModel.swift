@@ -28,6 +28,7 @@ final class WindowSnappingModel: ObservableObject {
     private let workspaceCenter: NotificationCenter
     private let applicationCenter: NotificationCenter
     private let distributedCenter: NotificationCenter
+    private var recordedAvailability: [String: String]?
     private var running = false
     private var suspended = false
     private var awake = true
@@ -71,7 +72,17 @@ final class WindowSnappingModel: ObservableObject {
         let trust = trusted(), available = eligibility()
         if hasAccessibility != trust { hasAccessibility = trust }
         if eligible != available { eligible = available }
-        guard enabled, running, available, trust, awake, active, sessionIsActive(), !suspended else {
+        let sessionActive = sessionIsActive()
+        if DebugEventRecorder.shared.isEnabled {
+            let fields = ["enabled": String(enabled), "running": String(running), "eligible": String(available),
+                "accessibility": String(trust), "awake": String(awake), "active": String(active),
+                "session_active": String(sessionActive), "suspended": String(suspended)]
+            if fields != recordedAvailability {
+                DebugEventRecorder.shared.record(category: .snapping, event: "availability", fields: fields)
+                recordedAvailability = fields
+            }
+        } else { recordedAvailability = nil }
+        guard enabled, running, available, trust, awake, active, sessionActive, !suspended else {
             monitor.stop(); if monitorAvailable { monitorAvailable = false }; return
         }
         monitor.onInteraction = { [weak self] in

@@ -54,6 +54,8 @@ final class WindowSnapMonitor {
         guard lastInteraction.mouseDownCount > 0, !lastInteraction.completed else { return }
         if let stage { lastInteraction.stage = stage }
         if let reason { lastInteraction.reason = reason }
+        trace("interaction_finished", ["generation": String(lastInteraction.generation), "stage": lastInteraction.stage,
+            "reason": lastInteraction.reason ?? "none"])
         lastInteraction.completed = true
         diagnosticSnapshot.recordCompletedDrag(lastInteraction)
     }
@@ -62,11 +64,25 @@ final class WindowSnapMonitor {
         guard lastInteraction.generation == token, !lastInteraction.completed else { return }
         update(&lastInteraction)
     }
+    /// Fields are evaluated only while recording. Coordinates are global logical points.
+    private func trace(_ event: String, _ fields: @autoclosure () -> [String: String]) {
+        guard DebugEventRecorder.shared.isEnabled else { return }
+        DebugEventRecorder.shared.record(category: .snapping, event: event, fields: fields())
+    }
+    private static func rectText(_ frame: CGRect) -> String {
+        "\(frame.minX),\(frame.minY),\(frame.width),\(frame.height)"
+    }
     private func reject(_ token: UInt64, _ reason: String) {
+        trace("rejected", ["generation": String(token), "reason": reason])
         record(token) { $0.stage = "rejected"; $0.reason = reason }
     }
     private func axReporter(_ token: UInt64) -> (String, AXError) -> Void {
-        { [weak self] operation, error in self?.record(token) { $0.axResults[operation] = error.rawValue } }
+        { [weak self] operation, error in
+            self?.record(token) { $0.axResults[operation] = error.rawValue }
+            if error != .success || operation == "set_size" || operation == "set_position" {
+                self?.trace("ax_result", ["generation": String(token), "operation": operation, "code": String(error.rawValue)])
+            }
+        }
     }
     private var pending: Input?
     private var scheduled = false
@@ -87,7 +103,10 @@ final class WindowSnapMonitor {
         guard tap == nil else { return true }
         let mask = [CGEventType.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown].reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         guard let port = CGEvent.tapCreate(tap: .cgAnnotatedSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
-            eventsOfInterest: mask, callback: Self.callback, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
+            eventsOfInterest: mask, callback: Self.callback, userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            trace("monitor_availability", ["available": "false", "reason": "tap_creation_failed"])
+            return false
+        }
         tap = port
         source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -95,12 +114,19 @@ final class WindowSnapMonitor {
         lock.lock(); enabled = true; activePID = frontmostPID; lock.unlock()
         updateScreens()
         CGEvent.tapEnable(tap: port, enable: true)
+        trace("monitor_availability", ["available": "true", "reason": "started"])
         return true
     }
     func updateScreens() {
         dispatchPrecondition(condition: .onQueue(.main))
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         let captured = NSScreen.screens.map { (WindowSnapping.cgRect($0.frame, primaryTop: primaryTop), WindowSnapping.cgRect($0.visibleFrame, primaryTop: primaryTop)) }
+        if DebugEventRecorder.shared.isEnabled {
+            for (index, screen) in NSScreen.screens.enumerated() {
+                trace("display", ["index": String(index), "coordinate_space": "cg_ax_global_points", "primary_top": String(Double(primaryTop)),
+                    "scale": String(Double(screen.backingScaleFactor)), "frame": Self.rectText(captured[index].0), "visible": Self.rectText(captured[index].1)])
+            }
+        }
         lock.lock()
         screens = captured
         lock.unlock()
@@ -115,6 +141,7 @@ final class WindowSnapMonitor {
     func applicationActivated(_ pid: pid_t) {
         dispatchPrecondition(condition: .onQueue(.main))
         lock.lock()
+        trace("activation", ["pid": String(pid), "generation": String(session.generation)])
         activePID = pid
         let mismatched = session.activated(pid: pid)
         if mismatched {
@@ -129,7 +156,8 @@ final class WindowSnapMonitor {
     func stop() {
         dispatchPrecondition(condition: .onQueue(.main))
         cancel()
-        lock.lock(); enabled = false; lock.unlock()
+        lock.lock(); let wasEnabled = enabled; enabled = false; lock.unlock()
+        if wasEnabled { trace("monitor_availability", ["available": "false", "reason": "stopped"]) }
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil; source = nil; preview?.orderOut(nil); preview = nil
@@ -141,13 +169,14 @@ final class WindowSnapMonitor {
     private func receive(_ type: CGEventType, _ event: CGEvent) {
         dispatchPrecondition(condition: .onQueue(.main))
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            trace("monitor_availability", ["available": "false", "reason": type == .tapDisabledByTimeout ? "tap_timeout" : "tap_disabled_by_input"])
             stop(); onUnavailable?(); return
         }
         if type == .keyDown {
             if event.getIntegerValueField(.keyboardEventKeycode) == 53 { cancel() }
             return
         }
-        // Read integer routing metadata directly from this event; never log its location or content.
+        // Read only routing metadata and pointer coordinates; never record event content.
         let rawTargetPID = event.getIntegerValueField(.eventTargetUnixProcessID)
         let rawHandlingWindow = event.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent)
         let rawUnderPointerWindow = event.getIntegerValueField(.mouseEventWindowUnderMousePointer)
@@ -171,6 +200,11 @@ final class WindowSnapMonitor {
         guard enabled else { lock.unlock(); return }
         let input = Input(type: type, point: point, generation: session.generation,
             eventTargetPID: targetPID, handlingWindowID: handlingWindowID, underPointerWindowID: underPointerWindowID)
+        if type == .leftMouseDown || type == .leftMouseUp {
+            trace(type == .leftMouseDown ? "pointer_down" : "pointer_up", ["generation": String(input.generation),
+                "x": String(Double(point.x)), "y": String(Double(point.y)), "pid": targetPID.map(String.init) ?? "none",
+                "handling_window": handlingWindowID.map(String.init) ?? "none", "pointer_window": underPointerWindowID.map(String.init) ?? "none"])
+        }
         if type == .leftMouseDown {
             lastInteraction = WindowSnapDiagnostics()
             lastInteraction.generation = input.generation
@@ -234,6 +268,8 @@ final class WindowSnapMonitor {
         else { resolved = resolveNative(input) }
         guard valid(input.generation) else { return }
         guard let resolved else { if boundary != nil { reject(input.generation, "app_ax_hit_failed") }; return }
+        trace("resolved", ["generation": String(input.generation), "pid": String(resolved.access.processID),
+            "original": Self.rectText(resolved.frame), "earlier": resolved.earlierFrame.map(Self.rectText) ?? "none"])
         let pid = resolved.access.processID
         guard pid != ProcessInfo.processInfo.processIdentifier else { reject(input.generation, "own_process"); return }
         record(input.generation) { $0.stage = "tracking_move"; $0.resolved = true; $0.resolutionMethod = "app_hit"; $0.selectedPID = pid }
@@ -264,6 +300,8 @@ final class WindowSnapMonitor {
         let selection = WindowSnapping.selectWindow(at: input.point, candidates: candidates,
             ownPID: ProcessInfo.processInfo.processIdentifier, handlingWindowID: input.handlingWindowID,
             eventTargetPID: input.eventTargetPID)
+        trace("routing", ["generation": String(input.generation), "method": selection.method, "reason": selection.rejection ?? "none",
+            "pid": selection.candidate.map { String($0.processID) } ?? "none"])
         record(input.generation) { $0.routingMethod = selection.method }
         guard let pid = selection.candidate?.processID else {
             reject(input.generation, selection.rejection ?? "identity_not_resolved"); return nil
@@ -275,6 +313,7 @@ final class WindowSnapMonitor {
         AXUIElementSetMessagingTimeout(application, 0.12)
         var hit: AXUIElement?
         let hitError = AXUIElementCopyElementAtPosition(application, Float(input.point.x), Float(input.point.y), &hit)
+        trace("ax_hit", ["generation": String(input.generation), "code": String(hitError.rawValue)])
         record(input.generation) { $0.axHitError = hitError.rawValue }
         guard hitError == .success, let hit, valid(input.generation) else { reject(input.generation, "app_ax_hit_failed"); return nil }
         var hitPID: pid_t = 0
@@ -327,6 +366,9 @@ final class WindowSnapMonitor {
         lock.lock(); let displays = screens; lock.unlock()
         let display = displays.first { $0.0.contains(input.point) }
         let confirmed = drag.movement.observe(frame: current, pointer: input.point, topBoundary: display?.1.minY)
+        trace("movement", ["generation": String(input.generation), "x": String(Double(input.point.x)), "y": String(Double(input.point.y)),
+            "current": Self.rectText(current), "confirmed": String(confirmed), "invalidated": String(drag.movement.invalidated),
+            "display": display.map { Self.rectText($0.0) } ?? "none", "visible": display.map { Self.rectText($0.1) } ?? "none"])
         self.drag = drag.movement.invalidated ? nil : drag
         if drag.movement.invalidated { reject(input.generation, "window_resized") }
         if confirmed { record(input.generation) { $0.movementConfirmed = true; $0.stage = "move_confirmed" } }
@@ -336,6 +378,7 @@ final class WindowSnapMonitor {
             return
         }
         let target = display.flatMap { drag.movement.target(pointer: input.point, screen: $0.0, visible: $0.1) }
+        trace("target", ["generation": String(input.generation), "requested": target.map(Self.rectText) ?? "none"])
         if target != nil { record(input.generation) { $0.targetFound = true; $0.stage = "edge_target" } }
         if input.type == .leftMouseUp {
             self.drag = nil; show(nil, token: input.generation)
@@ -352,7 +395,10 @@ final class WindowSnapMonitor {
     private func apply(_ application: WindowSnapApplication, access: WindowSnapWindowAccess, token: UInt64) {
         guard valid(token) else { return }
         var application = application
-        let result = application.advance(window: access) { self.valid(token) }
+        trace("commit_advance", ["generation": String(token), "attempts": String(application.attempts), "requested": Self.rectText(application.target)])
+        let result = application.advance(window: access, diagnostic: { [weak self] stage, frame in
+            self?.trace("commit_observation", ["generation": String(token), "stage": stage, "frame": frame.map(Self.rectText) ?? "none"])
+        }, isCurrent: { self.valid(token) })
         guard valid(token) else { return }
         switch result {
         case .pending:
@@ -360,6 +406,7 @@ final class WindowSnapMonitor {
         case .succeeded, .failed:
             let succeeded: Bool
             if case .succeeded = result { succeeded = true } else { succeeded = false }
+            trace("commit_finished", ["generation": String(token), "succeeded": String(succeeded), "attempts": String(application.attempts)])
             record(token) { $0.commitSucceeded = succeeded; $0.reason = succeeded ? nil : "commit_not_stable"; $0.stage = "finished" }
             lock.lock()
             if lastInteraction.generation == token { finishInteractionLocked() }

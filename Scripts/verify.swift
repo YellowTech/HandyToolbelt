@@ -29,6 +29,7 @@ if CommandLine.arguments.dropFirst().elementsEqual(["--generate-docs"]) {
     try run(["Scripts/check-gesture-stack-runtime.swift"])
     try run(["Scripts/check-force-click-model.swift"])
     try run(["Scripts/check-temporal-gesture-model.swift"])
+    try run(["Scripts/check-typing-suppression-model.swift"])
     try run(["Scripts/check-settings-transfer.swift"])
     let loginCheck = Process()
     loginCheck.executableURL = URL(fileURLWithPath: "/bin/zsh")

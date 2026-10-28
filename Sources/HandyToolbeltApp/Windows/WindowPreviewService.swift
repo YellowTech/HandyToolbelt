@@ -59,6 +59,12 @@ final class WindowPreviewService: ObservableObject {
     @Published private(set) var hasPermission: Bool
     @Published private(set) var didRequestPermission = false
     @Published private(set) var accessVerifiedThisSession = false
+    // This records our explanation and a successful test, never a macOS grant.
+    static let noticeVersion = 1
+    static let noticeKey = "windowPreview.directCaptureNoticeVersion"
+    @Published private(set) var hasAcknowledgedNotice: Bool
+    var canUsePreviews: Bool { hasPermission && hasAcknowledgedNotice }
+    private let defaults: UserDefaults
     private let capture: WindowPreviewCapturing
     private var lifetime = WindowPreviewLifetime()
     private var items: [WindowItem] = []
@@ -72,9 +78,11 @@ final class WindowPreviewService: ObservableObject {
     private var captures: [UUID: (item: UUID, generation: UInt64)] = [:]
     private var contentLoaded = false
 
-    init(capture: WindowPreviewCapturing? = nil) {
+    init(capture: WindowPreviewCapturing? = nil, defaults: UserDefaults = .standard) {
         let capture = capture ?? ScreenCaptureWindowPreviewCapture()
         self.capture = capture; self.hasPermission = capture.hasPermission()
+        self.defaults = defaults
+        self.hasAcknowledgedNotice = defaults.integer(forKey: Self.noticeKey) == Self.noticeVersion
     }
     func refreshPermission() {
         let permission = capture.hasPermission()
@@ -90,11 +98,19 @@ final class WindowPreviewService: ObservableObject {
         capture.requestPermission()
         refreshPermission()
     }
-    func noteSuccessfulAccessCheck() { accessVerifiedThisSession = true; refreshPermission() }
+    func noteSuccessfulAccessCheck() {
+        refreshPermission()
+        guard hasPermission else { return }
+        accessVerifiedThisSession = true
+        if !hasAcknowledgedNotice {
+            defaults.set(Self.noticeVersion, forKey: Self.noticeKey)
+            hasAcknowledgedNotice = true
+        }
+    }
     func begin(items: [WindowItem]) {
         end()
         refreshPermission()
-        guard hasPermission else { return }
+        guard canUsePreviews else { return }
         self.items = items
         lifetime.begin()
     }
@@ -134,7 +150,7 @@ final class WindowPreviewService: ObservableObject {
         pump()
     }
     private func pump() {
-        guard lifetime.isActive, !visibleIDs.isEmpty else { return }
+        guard lifetime.isActive, hasAcknowledgedNotice, !visibleIDs.isEmpty else { return }
         guard capture.hasPermission() else { refreshPermission(); return }
         if !contentLoaded {
             guard contentRequest == nil else { return }

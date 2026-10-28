@@ -54,7 +54,7 @@ struct PermissionAccessSection<Content: View>: View {
                 Button("Check Again") { host.refreshPermissions(); didCheck = true }
                 Button(host.isRestarting ? "Restarting…" : "Restart HandyToolbelt", action: host.restart)
                     .disabled(host.isRestarting)
-                if let testPreview { Button("Test Preview…", action: testPreview) }
+                if let testPreview { Button("Open Setup…", action: testPreview) }
             }
             if didCheck {
                 Label(fulfilled ? "macOS reports access enabled for this running app." : "macOS reports no access for this running app. Enable access in System Settings, then restart if needed.",
@@ -75,11 +75,15 @@ struct ScreenRecordingAccessView: View {
             title: "Screen & System Audio Recording",
             symbol: "rectangle.on.rectangle",
             fulfilled: model.previews.hasPermission,
-            explanation: "Allow HandyToolbelt in System Settings → Privacy & Security → Screen & System Audio Recording for window previews. Test Preview checks a real capture; macOS may ask for additional confirmation.",
+            explanation: "Allow HandyToolbelt in System Settings → Privacy & Security → Screen & System Audio Recording for window previews. Open Setup explains the separate direct-capture confirmation before testing one image. Previews never capture audio; macOS may ask again later.",
             host: host,
             openSettings: model.openPreviewSettings,
             testPreview: model.openPreviewSetup
         ) {
+            if !model.previews.hasAcknowledgedNotice {
+                Text("Preview setup is required before the chooser captures images. App icons remain available.")
+                    .font(.caption).foregroundStyle(Theme.secondary)
+            }
             if model.previews.accessVerifiedThisSession {
                 Text("A window preview was verified this session.").font(.caption).foregroundStyle(Theme.secondary)
             }

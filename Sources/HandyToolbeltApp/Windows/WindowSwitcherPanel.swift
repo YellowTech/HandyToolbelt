@@ -33,8 +33,8 @@ private struct WindowChooserView: View {
     var body: some View {
         WindowChooserContent(items: model.items, settings: model.settings, selectedID: model.selectedID,
                              isLoading: model.isLoading, message: model.message, images: model.previews.images,
-                             hasPreviewPermission: model.previews.hasPermission, onChoose: model.choose,
-                             onCancel: model.cancel, onVisible: model.updateVisiblePreviews)
+                             hasPreviewPermission: model.previews.canUsePreviews, onChoose: model.choose,
+                             onCancel: model.cancel, onVisible: model.updateVisiblePreviews, onOpenSetup: model.requestPreviewSetup)
     }
 }
 
@@ -50,6 +50,7 @@ struct WindowChooserContent: View {
     var onChoose: (UUID) -> Void
     var onCancel: () -> Void
     var onVisible: (Set<UUID>) -> Void
+    var onOpenSetup: (() -> Void)? = nil
     var exampleMode = false
     var iconProvider: ((WindowItem) -> AnyView)? = nil
     var previewProvider: ((WindowItem) -> AnyView)? = nil
@@ -77,7 +78,10 @@ struct WindowChooserContent: View {
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     if settings.showsPreviews && !hasPreviewPermission {
-                        Text("Allow Screen & System Audio Recording in Global Settings for previews.")
+                        HStack {
+                            Text("Preview setup required · App icons remain available.")
+                            if let onOpenSetup { Button("Open Setup…", action: onOpenSetup).accessibilityLabel("Open window preview setup") }
+                        }
                     }
                     Text("Tab / arrows to choose · Shift back · Enter to switch · Esc to cancel")
                 }.font(.caption).foregroundStyle(Theme.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(14)

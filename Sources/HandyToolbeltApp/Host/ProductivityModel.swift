@@ -62,8 +62,21 @@ final class ProductivityModel: ObservableObject {
     enum SettingsTarget: String { case accessibility, screenRecording, overlays }
     @Published private(set) var settingsTarget: SettingsTarget?
     @Published private(set) var settingsNavigationID = UUID()
+    var onRevealMainWindow: (() -> Void)?
     func revealSettings(_ target: SettingsTarget) {
         settingsTarget = target; settingsNavigationID = UUID(); section = .settings
+    }
+    func openPreviewSetup() {
+        windows.cancel()
+        revealSettings(.screenRecording)
+        NSApp.activate(ignoringOtherApps: true)
+        onRevealMainWindow?()
+        // Let the destination sheet host mount before presenting.
+        let navigationID = settingsNavigationID
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.section == .settings, self.settingsNavigationID == navigationID, !self.isRestarting else { return }
+            self.windows.openPreviewSetup()
+        }
     }
     func consumeSettingsNavigation(_ id: UUID) {
         guard settingsNavigationID == id else { return }
@@ -104,6 +117,7 @@ final class ProductivityModel: ObservableObject {
         if let index = arguments.firstIndex(of: "--section"), index + 1 < arguments.count,
            let restored = ProductivitySection(rawValue: arguments[index + 1]), !trackpad.settingsNeedRecovery { section = restored }
         trackpad.setSelected(section == .trackpad)
+        windows.onPreviewSetupRequested = { [weak self] in self?.openPreviewSetup() }
         trackpad.onWindowAction = { [weak self] action, completion in self?.windows.perform(action, completion: completion) }
         trackpad.onShowText = { [weak display] action in display?.text(action.displayText, duration: action.displayDuration) }
         trackpad.onToast = { [weak display] text in display?.toast(text) }

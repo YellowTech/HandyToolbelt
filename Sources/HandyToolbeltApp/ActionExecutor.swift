@@ -5,6 +5,11 @@ import HandyToolbeltCore
 final class ActionExecutor {
     static let eventMarker: Int64 = 0x53555045525450
     private(set) var scriptRunning = false
+    private let accessibilityTrusted: () -> Bool
+
+    init(accessibilityTrusted: @escaping () -> Bool = { AXIsProcessTrusted() }) {
+        self.accessibilityTrusted = accessibilityTrusted
+    }
     var onWindowAction: ((SystemAction, @escaping (Result<String, Error>) -> Void) -> Void)?
     var onShowText: ((GestureAction) -> Void)?
     // NSAppleScript supports background execution; serialize scripts on this queue.
@@ -30,7 +35,12 @@ final class ActionExecutor {
             }
             return
         }
-        guard AXIsProcessTrusted() else {
+        // Keep window-action failures identifiable through gestures, stacks and automation.
+        // Callers still receive failure; interactive dispatch simply suppresses its modal.
+        let completion = action.kind == .system && action.system.isWindowAction
+            ? { (result: Result<String, Error>) in completion(result.mapError { WindowSwitcherFailure($0) }) }
+            : completion
+        guard accessibilityTrusted() else {
             completion(.failure(ActionError.message("Allow HandyToolbelt in Accessibility to run actions."))); return
         }
         switch action.kind {
@@ -115,4 +125,11 @@ final class ActionExecutor {
         case message(String)
         var errorDescription: String? { if case let .message(text) = self { return text }; return nil }
     }
+}
+
+/// Runtime window switching is best effort and must never interrupt the user with a modal.
+struct WindowSwitcherFailure: LocalizedError {
+    let underlying: Error
+    init(_ underlying: Error) { self.underlying = underlying }
+    var errorDescription: String? { underlying.localizedDescription }
 }

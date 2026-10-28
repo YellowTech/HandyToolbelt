@@ -21,14 +21,14 @@ struct ProductivityView: View {
         }
         .disabled(host.isRestarting)
         .alert("HandyToolbelt", isPresented: Binding(get: {
-            host.errorMessage != nil || windows.errorMessage != nil || trackpad.errorMessage != nil
+            host.errorMessage != nil || trackpad.errorMessage != nil
         }, set: { if !$0 { clearErrors() } })) {
             if trackpad.settingsNeedRecovery { Button("Back Up & Reset Settings", action: trackpad.recoverSettings) }
             Button("OK", role: .cancel, action: clearErrors)
-        } message: { Text(host.errorMessage ?? windows.errorMessage ?? trackpad.errorMessage ?? "") }
+        } message: { Text(host.errorMessage ?? trackpad.errorMessage ?? "") }
     }
 
-    private func clearErrors() { host.errorMessage = nil; windows.errorMessage = nil; trackpad.errorMessage = nil }
+    private func clearErrors() { host.errorMessage = nil; trackpad.errorMessage = nil }
 }
 
 /// Native hosts retain this observing root, never a snapshot of the selected
@@ -152,12 +152,22 @@ private struct WindowSettingsView: View {
                         }.frame(maxWidth: 420)
                     }
                     HStack {
-                        Toggle("Window previews", isOn: $trackpad.configuration.windowSwitcher.showsPreviews)
+                        Toggle("Window previews", isOn: Binding(get: { trackpad.configuration.windowSwitcher.showsPreviews }, set: { enabled in
+                            trackpad.configuration.windowSwitcher.showsPreviews = enabled
+                            if enabled && !model.previews.canUsePreviews { host.openPreviewSetup() }
+                        }))
                             .help("Minimized, hidden, and unavailable windows show their app icon.")
                         Spacer()
                         RequirementPill(title: "Screen & System Audio Recording", fulfilled: model.previews.hasPermission) { host.revealSettings(.screenRecording) }
                     }
                     if trackpad.configuration.windowSwitcher.showsPreviews {
+                        if !model.previews.canUsePreviews {
+                            HStack {
+                                Text("Preview setup required. You can keep switching with app icons.")
+                                    .font(.callout).foregroundStyle(Theme.secondary)
+                                Button("Open Setup…", action: host.openPreviewSetup)
+                            }
+                        }
                         HStack(spacing: 12) {
                             Text("Preview size").frame(width: 90, alignment: .leading)
                             Slider(value: $trackpad.configuration.windowSwitcher.previewScale, in: 0.75...1.5, step: 0.05)
@@ -296,6 +306,8 @@ private struct GlobalSettingsView: View {
                             Button("Review Gym Trials") { trackpad.reviewGymTrials(); host.section = .trackpad }
                         }
                     }
+                    Divider()
+                    DebugRecorderSettingsView()
                 }.padding(28).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
             }
             .onAppear { isVisible = true; host.refreshPermissions(); reveal(proxy) }
