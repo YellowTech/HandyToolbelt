@@ -93,6 +93,44 @@ public protocol WindowSnapWindowAccess: AnyObject {
     func readFrame() -> CGRect?
     func setSize(_ size: CGSize) -> Bool
     func setPosition(_ point: CGPoint) -> Bool
+    /// Returns whether the synchronous body ran. Unsupported adapters remain paced.
+    func withImmediateUpdates(isCurrent: () -> Bool, _ body: () -> Void) -> Bool
+}
+public extension WindowSnapWindowAccess {
+    func withImmediateUpdates(isCurrent: () -> Bool, _ body: () -> Void) -> Bool { false }
+}
+
+/// A synchronous lease only. Cleanup deliberately ignores session eligibility:
+/// accepted mode changes still need restoration after cancellation or focus loss.
+public enum WindowSnapImmediateUpdates {
+    @discardableResult public static func perform(assistiveTechnologyEnabled: Bool,
+        isEligible: () -> Bool, readMode: () -> Bool?, writeMode: (Bool) -> Bool,
+        diagnostic: (String) -> Void = { _ in }, body: () -> Void) -> Bool {
+        guard !assistiveTechnologyEnabled, isEligible() else { return false }
+        guard let original = readMode(), isEligible() else { diagnostic("enhanced_ui_unavailable"); return false }
+        if !original {
+            diagnostic("enhanced_ui_already_disabled")
+            guard isEligible() else { return false }
+            body()
+            return true
+        }
+        guard isEligible() else { return false }
+        // Owe cleanup before the call: a rejected setter may still have changed it.
+        defer {
+            var restored = false
+            for _ in 0..<2 {
+                _ = writeMode(true)
+                if readMode() == true { restored = true; break }
+            }
+            diagnostic(restored ? "enhanced_ui_restore_verified" : "enhanced_ui_restore_failed")
+        }
+        let disabled = writeMode(false)
+        guard isEligible(), disabled, isEligible() else { return false }
+        guard readMode() == false, isEligible() else { diagnostic("enhanced_ui_disable_unconfirmed"); return false }
+        diagnostic("enhanced_ui_disabled")
+        body()
+        return true
+    }
 }
 
 /// A move is established by actual window translation, then survives OS edge clamping.
@@ -102,8 +140,13 @@ public struct WindowSnapDrag {
     public let down: CGPoint
     public private(set) var confirmed = false
     public private(set) var invalidated = false
-    private var previousFrame: CGRect?
-    private var previousPointer: CGPoint?
+    private struct Observation {
+        var time: TimeInterval
+        var frame: CGRect
+        var pointer: CGPoint
+    }
+    private var recentObservations: [Observation] = []
+    private var lastObservationTime: TimeInterval?
     private let earlierFrame: CGRect?
     private var observedFrame: CGRect?
     private var upwardMoveProven = false
@@ -117,10 +160,23 @@ public struct WindowSnapDrag {
             self.earlierFrame = earlierFrame
         } else { self.earlierFrame = nil }
     }
-    @discardableResult public mutating func observe(frame: CGRect, pointer: CGPoint, topBoundary: CGFloat? = nil) -> Bool {
+    @discardableResult public mutating func observe(frame: CGRect, pointer: CGPoint, topBoundary: CGFloat? = nil,
+        time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
         guard !invalidated else { return false }
         guard abs(frame.width-initial.width) < 2, abs(frame.height-initial.height) < 2 else {
             invalidated = true; return false
+        }
+        // AX can repeat an old frame while the pointer continues, then jump to
+        // a position associated with an earlier pointer. Keep only a brief,
+        // bounded causal history; a clock reset must not reuse future evidence.
+        if !time.isFinite || lastObservationTime.map({ time <= $0 }) == true {
+            recentObservations.removeAll(keepingCapacity: true)
+        }
+        lastObservationTime = time.isFinite ? time : nil
+        recentObservations.removeAll { time - $0.time > 0.25 }
+        if time.isFinite {
+            recentObservations.append(Observation(time: time, frame: frame, pointer: pointer))
+            if recentObservations.count > 12 { recentObservations.removeFirst(recentObservations.count - 12) }
         }
         if !confirmed {
             let pointerDelta = CGPoint(x: pointer.x-down.x, y: pointer.y-down.y)
@@ -130,18 +186,25 @@ public struct WindowSnapDrag {
                 confirmed = WindowSnapping.isMove(initial: earlierFrame, current: frame,
                     pointerDelta: pointerDelta, topBoundary: topBoundary)
             }
-            if !confirmed, let previousFrame, let previousPointer {
-                // The first AX read can arrive after down has already moved the window.
-                confirmed = WindowSnapping.isMove(initial: previousFrame, current: frame,
-                    pointerDelta: CGPoint(x: pointer.x-previousPointer.x, y: pointer.y-previousPointer.y), topBoundary: topBoundary)
+            if !confirmed {
+                for baselineIndex in recentObservations.indices {
+                    let baseline = recentObservations[baselineIndex]
+                    for endpoint in recentObservations.dropFirst(baselineIndex + 1) {
+                        if WindowSnapping.isMove(initial: baseline.frame, current: frame,
+                            pointerDelta: CGPoint(x: endpoint.pointer.x-baseline.pointer.x,
+                                                  y: endpoint.pointer.y-baseline.pointer.y), topBoundary: topBoundary) {
+                            confirmed = true
+                            break
+                        }
+                    }
+                    if confirmed { break }
+                }
             }
-            previousFrame = frame
-            previousPointer = pointer
         }
-        if confirmed {
-            let baselines = [initial, earlierFrame, observedFrame].compactMap { $0 }
-            if baselines.contains(where: { $0.minY - frame.minY >= 8 }) { upwardMoveProven = true }
-        }
+        // Preserve real upward motion while qualification catches up with AX;
+        // a later confirmed frame may already be back at the top boundary.
+        let baselines = [initial, earlierFrame, observedFrame].compactMap { $0 }
+        if baselines.contains(where: { $0.minY - frame.minY >= 8 }) { upwardMoveProven = true }
         observedFrame = frame
         return confirmed
     }
@@ -236,45 +299,152 @@ public struct WindowSnapDiagnosticsSnapshot: Codable, Equatable, Sendable {
 public struct WindowSnapApplication {
     public let target: CGRect
     public private(set) var attempts = 0
-    private var matchingObservations = 0
-    private var awaitingSizeFrom: CGRect?
+    private var pacedAttempts = 0
+    private enum Phase { case ready, moving, sizing, correcting, retaining }
+    private var phase = Phase.ready
+    private var observations = 0
+    private var previousObservation: CGRect?
+    private var stableObservations = 0
+    private var initialFrame: CGRect?
+    private var fastTried = false
+    private var fastObservations: Int?
+    private var fastMatchingObservations = 0
+    private var fastAccepted = false
+    private var finished: Result?
     public init(target: CGRect) { self.target = target }
     public static func matches(_ frame: CGRect, _ target: CGRect) -> Bool {
         abs(frame.minX-target.minX) < 2 && abs(frame.minY-target.minY) < 2 &&
         abs(frame.width-target.width) < 2 && abs(frame.height-target.height) < 2
     }
-    public enum Result { case pending, succeeded, failed }
-    /// Two spaced matches establish stability; a rollback triggers at most three applications.
+    public enum Result { case pending, succeeded, limited, failed }
+    private mutating func finish(_ result: Result) -> Result { finished = result; return result }
+    private mutating func awaitSettlement(_ phase: Phase) {
+        self.phase = phase
+        previousObservation = nil
+        stableObservations = 0
+    }
+    private mutating func retain(_ frame: CGRect, diagnostic: (String, CGRect?) -> Void) -> Result {
+        guard let initialFrame, !Self.matches(frame, initialFrame) else { return finish(.failed) }
+        diagnostic("retained_limited", frame)
+        return finish(.limited)
+    }
+    private static func validFrame(_ frame: CGRect) -> Bool {
+        frame.width > 0 && frame.height > 0 && frame.minX.isFinite && frame.minY.isFinite &&
+        frame.width.isFinite && frame.height.isFinite
+    }
+    private static func applyImmediately(window: WindowSnapWindowAccess, target: CGRect,
+        isCurrent: () -> Bool, onWrite: () -> Void) -> Bool {
+        func eligible() -> Bool { isCurrent() && window.isEligibleAndActive() && isCurrent() }
+        func read() -> CGRect? {
+            guard eligible(), let frame = window.readFrame(), eligible(), validFrame(frame) else { return nil }
+            return frame
+        }
+        guard var frame = read() else { return false }
+        if abs(frame.minX-target.minX) >= 2 || abs(frame.minY-target.minY) >= 2 {
+            guard eligible() else { return false }
+            onWrite()
+            guard window.setPosition(target.origin), eligible(), let moved = read() else { return false }
+            frame = moved
+        }
+        if abs(frame.width-target.width) >= 2 || abs(frame.height-target.height) >= 2 {
+            guard eligible() else { return false }
+            onWrite()
+            guard window.setSize(target.size), eligible(), let resized = read() else { return false }
+            frame = resized
+        }
+        if abs(frame.minX-target.minX) >= 2 || abs(frame.minY-target.minY) >= 2 {
+            guard eligible() else { return false }
+            onWrite()
+            guard window.setPosition(target.origin), eligible(), read() != nil else { return false }
+        }
+        return true
+    }
+    /// Try one scoped immediate change and verify it across scheduled readbacks.
+    /// If unavailable or unsuccessful, paced writes wait for three stable readings
+    /// between attributes to let asynchronous frame updates settle.
     public mutating func advance(window: WindowSnapWindowAccess, diagnostic: (String, CGRect?) -> Void = { _, _ in }, isCurrent: () -> Bool) -> Result {
-        guard isCurrent(), window.isEligibleAndActive(), isCurrent(), let frame = window.readFrame(), isCurrent() else { return .failed }
+        if let finished { return finished }
+        // With the monitor's 100ms cadence, even an ever-changing owner ends in
+        // about 4.4 seconds. At most one fast batch and three paced passes can issue effects.
+        guard observations < 44 else { return finish(.failed) }
+        observations += 1
+        guard isCurrent(), window.isEligibleAndActive(), isCurrent(), let frame = window.readFrame(),
+              isCurrent(), window.isEligibleAndActive(), isCurrent(), Self.validFrame(frame) else { return finish(.failed) }
         diagnostic("readback", frame)
-        if let original = awaitingSizeFrom {
-            awaitingSizeFrom = nil
-            guard abs(frame.width-target.width) < 2, abs(frame.height-target.height) < 2 else {
-                diagnostic("size_unmatched_restore", frame)
-                if isCurrent(), window.isEligibleAndActive(), isCurrent() { _ = window.setSize(original.size) }
-                return .failed
+        if initialFrame == nil { initialFrame = frame }
+        if let count = fastObservations {
+            fastObservations = count + 1
+            fastMatchingObservations = Self.matches(frame, target) ? fastMatchingObservations + 1 : 0
+            guard count + 1 >= 3 else { return .pending }
+            fastObservations = nil
+            if fastAccepted, fastMatchingObservations >= 3 {
+                diagnostic("fast_verified", frame)
+                return finish(.succeeded)
             }
-            guard isCurrent(), window.isEligibleAndActive(), isCurrent(), window.setPosition(target.origin), isCurrent() else { return .failed }
-            return .pending
+            diagnostic("fast_fallback", frame)
+            awaitSettlement(.ready)
         }
-        if Self.matches(frame, target) {
-            matchingObservations += 1
-            return matchingObservations >= 2 ? .succeeded : .pending
+        if let previousObservation, Self.matches(frame, previousObservation) { stableObservations += 1 }
+        else { stableObservations = 1 }
+        previousObservation = frame
+        if phase == .ready, Self.matches(frame, target) {
+            return stableObservations >= 2 ? finish(.succeeded) : .pending
         }
-        matchingObservations = 0
-        guard attempts < 3, isCurrent(), window.isEligibleAndActive(), isCurrent() else { return .failed }
-        attempts += 1
-        guard window.setSize(target.size), isCurrent(), window.isEligibleAndActive(), isCurrent(),
-              let resized = window.readFrame(), isCurrent() else { return .failed }
-        diagnostic("after_size", resized)
-        guard abs(resized.width-target.width) < 2, abs(resized.height-target.height) < 2 else {
-            // AX success may precede the owner's layout update. Allow one spaced
-            // observation before treating a mismatch as a genuine size constraint.
-            awaitingSizeFrom = frame
-            return .pending
+        if stableObservations >= 3, Self.matches(frame, target) { return finish(.succeeded) }
+        if phase == .ready, !fastTried {
+            fastTried = true
+            diagnostic("fast_attempt", frame)
+            var accepted = false
+            var wrote = false
+            let ran = window.withImmediateUpdates(isCurrent: isCurrent) {
+                accepted = Self.applyImmediately(window: window, target: target, isCurrent: isCurrent, onWrite: { wrote = true })
+            }
+            if wrote { attempts += 1 }
+            guard isCurrent(), window.isEligibleAndActive(), isCurrent() else { return finish(.failed) }
+            if ran {
+                if !accepted { diagnostic("fast_batch_failed", nil) }
+                fastAccepted = accepted
+                fastObservations = 0
+                fastMatchingObservations = 0
+                previousObservation = nil
+                stableObservations = 0
+                return .pending
+            }
+            diagnostic("fast_unavailable", frame)
         }
-        guard isCurrent(), window.isEligibleAndActive(), isCurrent(), window.setPosition(target.origin), isCurrent() else { return .failed }
+        if phase != .ready {
+            guard stableObservations >= 3 else { return .pending }
+            if phase == .retaining { return retain(frame, diagnostic: diagnostic) }
+        }
+        let next: Phase
+        switch phase {
+        case .ready:
+            next = .moving
+        case .moving:
+            next = .sizing
+        case .sizing:
+            if abs(frame.minX-target.minX) >= 2 || abs(frame.minY-target.minY) >= 2 {
+                next = .correcting
+            } else {
+                if pacedAttempts >= 3 { return retain(frame, diagnostic: diagnostic) }
+                next = .moving
+            }
+        case .correcting:
+            if pacedAttempts >= 3 { return retain(frame, diagnostic: diagnostic) }
+            next = .moving
+        case .retaining:
+            return retain(frame, diagnostic: diagnostic)
+        }
+        guard isCurrent(), window.isEligibleAndActive(), isCurrent() else { return finish(.failed) }
+        let accepted: Bool
+        if next == .sizing {
+            accepted = window.setSize(target.size)
+        } else {
+            if next == .moving { attempts += 1; pacedAttempts += 1 }
+            accepted = window.setPosition(target.origin)
+        }
+        guard isCurrent(), window.isEligibleAndActive(), isCurrent() else { return finish(.failed) }
+        awaitSettlement(accepted ? next : .retaining)
         return .pending
     }
 }

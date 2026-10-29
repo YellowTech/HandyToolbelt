@@ -1,5 +1,49 @@
 # HandyToolbelt release review
 
+## Fast snapping with paced fallback — 0.30.7 (75), 2026-10-29
+
+Reviewed [Rectangle's frame-adjustment handling](https://github.com/rxhanson/Rectangle/blob/main/Rectangle/AccessibilityElement.swift) and [Enhanced UI notes](https://github.com/rxhanson/Rectangle/blob/main/TerminalCommands.md#control-enhanced-ui-handling). HandyToolbelt independently implements a scoped fast attempt: inspect the target app's `AXEnhancedUserInterface`, temporarily disable it when needed, change the frame, and restore and verify the original mode immediately afterward. Unknown or unconfirmed mode changes use the paced path. VoiceOver and Switch Control keep paced handling; no permanent per-app accessibility policy is introduced.
+
+The fast result is checked across spaced observations. Incorrect or overwritten results fall back to the existing move-first paced sequence, with bounded work and partial geometry retained. Cancellation still stops further frame writes while restoring any mode change already attempted. The fast path does not add an animation or a new user setting.
+
+The full unit/contract suite passed, including 13 immediate-update policy tests and 45 snapping tests; 39 production-pipeline checks passed. Coverage includes immediate visible placement, a single fast attempt followed by paced recovery, coupled asynchronous updates, native failures, cancellation and lost eligibility at each write, stale geometry after a mode change, and verified restoration with bounded retries. Restoration denied by macOS is recorded rather than retried indefinitely. The user confirmed that snapping is much faster and works on this Mac; fallback behavior has automated coverage but has not been deliberately forced in a physical test.
+
+Release compilation and strict signature verification passed. Installed and restarted 0.30.7 with matching candidate executables, one app process, unchanged settings and signing requirement, and the Snapping page available. Rollback: `.build/install-backups/2026-10-29T21-04-35Z`.
+
+## Recognize delayed window movement near the menu bar — 0.30.6 (74), 2026-10-29
+
+The 0.30.5 recording showed successful top, left and right commits, but one down-then-up titlebar drag was rejected as `movement_not_proven`. Firefox's AX frame repeated and then jumped while pointer samples continued moving. Comparing only the latest or immediately adjacent samples missed the corresponding window translation.
+
+Qualification now compares against a bounded history of at most 12 observations within 250 ms. The existing 8 pt minimum window translation, 12 pt displacement tolerance, unchanged-size requirement and menu-bar intent checks remain. The monitor injects monotonic time; stale, reversed and nonfinite timestamps cannot reuse older history. The snap application sequence is unchanged.
+
+Numeric core and production replays fail before the change and pass afterward. Review also reproduced and fixed losing upward intent when qualification arrives after the window has already returned to the menu bar; actual upward movement is retained, but every target still requires a confirmed move. The full unit/contract suite passed, followed by 44 snapping tests and 34 production-pipeline checks after that final correction. Coverage preserves stationary-content, resize, stale-history and purely horizontal menu-bar rejection. Physical menu-bar dragging remains for user verification.
+
+Release compilation and strict signature verification passed. Installed and restarted 0.30.6 with matching candidate executables, one app process, unchanged settings and signing requirement, and the Snapping page available. Rollback: `.build/install-backups/2026-10-29T19-46-59Z`.
+
+## Settle window changes between snapping steps — 0.30.5 (73), 2026-10-29
+
+The Firefox right-half trace showed successful size writes followed by a position correction that was then observed with the old width. Rapid changes to separate AX attributes could overwrite the other part of an in-flight frame change. Snapping now separates move, resize, and any necessary correction across scheduled observations. It still moves first, preserves partial results, and stops on cancellation or lost eligibility. Diagnostics call retained nonexact geometry a partial result rather than assuming a native constraint.
+
+A numeric fixture with independently committed and optimistically reported geometry fails against 0.30.4 and passes with paced effects. Coverage includes varied native delays, chronological production scheduling, cancellation with native work already pending, already-exact geometry without setters, and bounded unstable readbacks. The full unit/contract suite passed, including 39 snapping tests; 33 production-pipeline checks passed. Three stable 100 ms observations separate each changed attribute. This is bounded settling based on AX readbacks, not an authoritative native animation-completion signal; a physical Firefox retest is still needed.
+
+Release compilation and strict signature verification passed. Installed and restarted 0.30.5 with matching candidate executables, one app process, unchanged settings and signing requirement, and the Snapping page available. Rollback: `.build/install-backups/2026-10-29T19-32-17Z`.
+
+## Retain best-effort snaps — 0.30.4 (72), 2026-10-29
+
+Snapping now moves first, resizes, then corrects the position if the old window size constrained the initial move. It makes at most three target applications and never writes the original frame back. Exact results require two spaced matching observations; a stable changed frame retained after a constraint or setter failure is reported separately as `constrained_result_retained`. Cancellation, lost eligibility, unreadable geometry, or exhausted verification stops further work without restoring the window.
+
+The full unit/contract suite passed, followed by 35 snapping tests and 31 production-pipeline checks after review. Review added a strict observation bound for alternating exact/nonexact frames, retained minimum-height geometry with position clamping, and cancellation during correction/readback. The three numeric cases from the work-laptop trace still pass. The affected work laptop still needs a physical drag test.
+
+Release compilation and strict signature verification passed. Installed and restarted 0.30.4; both executables match the signed candidate, one app process is running, settings and the signing requirement are unchanged, and the Snapping page opens. Rollback: `.build/install-backups/2026-10-29T19-19-24Z`.
+
+## Position-constrained snapping — 0.30.3 (71), 2026-10-29
+
+The work-laptop trace exposed a transaction-order bug: resizing at the old origin was constrained to the remaining display width or height, and the size mismatch prevented any position change. Snapping now applies both size and position and uses bounded, spaced corrections before judging the final rectangle. Two matching observations still establish success. Genuine constraints or partial setter failures trigger bounded best-effort restoration of the original frame; cancellation, lost eligibility, and unreadable state stop further writes.
+
+Three numeric fixtures reproduce the trace's two full-screen and one left-half failure on an external display above the primary. They fail against the previous implementation and pass with the correction in both core and production-pipeline checks. Additional coverage exercises delayed size readbacks, position clamping, native drag rollback, actual size limits, partial setter failure, and cancellation or permission loss during restoration. The original user log remains outside the repository.
+
+Review added terminal failure handling, accurate application counts, no redundant restoration when the original frame is already restored, and a minimum-height case requiring both restoration passes. The full unit/contract suite passed, followed by 34 focused snapping tests and 30 production-pipeline checks on the final transaction. Release compilation and strict signature verification passed. Installed and restarted 0.30.3 with matching candidate binaries, unchanged settings and signing requirement, and the Snapping page available. Rollback: `.build/install-backups/2026-10-29T19-01-09Z`. The affected work laptop still needs a physical drag test.
+
 ## Wider tip-tap edge exclusion — 0.30.2 (70), 2026-10-28
 
 The default resting-finger edge deadzone increases from 4% to 6%. A regression uses rounded geometry from a reported near-rim accidental tip-tap: the old threshold accepts it, the new default rejects it, and a slightly inset anchor still works. Existing saved tuning remains respected; the user's current trackpad setting is explicitly updated to 6% during this installation.

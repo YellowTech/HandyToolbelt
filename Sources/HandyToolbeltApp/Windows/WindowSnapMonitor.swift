@@ -12,6 +12,7 @@ final class WindowSnapMonitor {
         var eventTargetPID: Int32?
         var handlingWindowID: UInt32?
         var underPointerWindowID: UInt32?
+        var assistiveTechnologyEnabled: Bool
     }
     private struct Drag { var access: WindowSnapWindowAccess; var pid: pid_t; var movement: WindowSnapDrag; var generation: UInt64 }
     /// Injectable native boundaries. The harness drives the production receive/drain/begin/process path.
@@ -79,7 +80,7 @@ final class WindowSnapMonitor {
     private func axReporter(_ token: UInt64) -> (String, AXError) -> Void {
         { [weak self] operation, error in
             self?.record(token) { $0.axResults[operation] = error.rawValue }
-            if error != .success || operation == "set_size" || operation == "set_position" {
+            if error != .success || operation == "set_size" || operation == "set_position" || operation.hasPrefix("enhanced_ui_") {
                 self?.trace("ax_result", ["generation": String(token), "operation": operation, "code": String(error.rawValue)])
             }
         }
@@ -196,10 +197,12 @@ final class WindowSnapMonitor {
         lock.unlock()
         guard onInteraction?() == true else { cancel(); return }
         if type == .leftMouseDown { cancel(); if boundary == nil { updateScreens() } }
+        let assistiveTechnologyEnabled = type != .leftMouseDown || NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled
         lock.lock()
         guard enabled else { lock.unlock(); return }
         let input = Input(type: type, point: point, generation: session.generation,
-            eventTargetPID: targetPID, handlingWindowID: handlingWindowID, underPointerWindowID: underPointerWindowID)
+            eventTargetPID: targetPID, handlingWindowID: handlingWindowID, underPointerWindowID: underPointerWindowID,
+            assistiveTechnologyEnabled: assistiveTechnologyEnabled)
         if type == .leftMouseDown || type == .leftMouseUp {
             trace(type == .leftMouseDown ? "pointer_down" : "pointer_up", ["generation": String(input.generation),
                 "x": String(Double(point.x)), "y": String(Double(point.y)), "pid": targetPID.map(String.init) ?? "none",
@@ -331,7 +334,11 @@ final class WindowSnapMonitor {
         guard valid(input.generation) else { return nil }
         let earlierFrame = input.handlingWindowID != nil && input.handlingWindowID != 0
             && selection.candidate?.windowID == input.handlingWindowID ? selection.candidate?.frame : nil
-        let access = AXWindowAccess(window: window, processID: pid, result: reportAX) { [weak self] in
+        let access = AXWindowAccess(window: window, application: application, processID: pid,
+            assistiveTechnologyEnabled: input.assistiveTechnologyEnabled, result: reportAX,
+            modeDiagnostic: { [weak self] stage in
+                self?.trace("enhanced_ui", ["generation": String(input.generation), "stage": stage])
+            }) { [weak self] in
             guard let self else { return false }
             self.lock.lock(); defer { self.lock.unlock() }
             return self.activePID == pid
@@ -365,7 +372,8 @@ final class WindowSnapMonitor {
         }
         lock.lock(); let displays = screens; lock.unlock()
         let display = displays.first { $0.0.contains(input.point) }
-        let confirmed = drag.movement.observe(frame: current, pointer: input.point, topBoundary: display?.1.minY)
+        let confirmed = drag.movement.observe(frame: current, pointer: input.point, topBoundary: display?.1.minY,
+            time: boundary?.now() ?? ProcessInfo.processInfo.systemUptime)
         trace("movement", ["generation": String(input.generation), "x": String(Double(input.point.x)), "y": String(Double(input.point.y)),
             "current": Self.rectText(current), "confirmed": String(confirmed), "invalidated": String(drag.movement.invalidated),
             "display": display.map { Self.rectText($0.0) } ?? "none", "visible": display.map { Self.rectText($0.1) } ?? "none"])
@@ -403,11 +411,17 @@ final class WindowSnapMonitor {
         switch result {
         case .pending:
             schedule(0.10) { [weak self] in self?.apply(application, access: access, token: token) }
-        case .succeeded, .failed:
+        case .succeeded, .limited, .failed:
             let succeeded: Bool
             if case .succeeded = result { succeeded = true } else { succeeded = false }
-            trace("commit_finished", ["generation": String(token), "succeeded": String(succeeded), "attempts": String(application.attempts)])
-            record(token) { $0.commitSucceeded = succeeded; $0.reason = succeeded ? nil : "commit_not_stable"; $0.stage = "finished" }
+            let reason: String?
+            switch result {
+            case .limited: reason = "partial_result_retained"
+            case .failed: reason = "commit_failed"
+            default: reason = nil
+            }
+            trace("commit_finished", ["generation": String(token), "succeeded": String(succeeded), "attempts": String(application.attempts), "reason": reason ?? "exact"])
+            record(token) { $0.commitSucceeded = succeeded; $0.reason = reason; $0.stage = "finished" }
             lock.lock()
             if lastInteraction.generation == token { finishInteractionLocked() }
             lock.unlock()
@@ -415,11 +429,34 @@ final class WindowSnapMonitor {
     }
     private final class AXWindowAccess: WindowSnapWindowAccess {
         let window: AXUIElement
+        let application: AXUIElement
+        let assistiveTechnologyEnabled: Bool
+        let modeDiagnostic: (String) -> Void
         let processID: Int32
         let isActive: () -> Bool
         let result: (String, AXError) -> Void
-        init(window: AXUIElement, processID: Int32, result: @escaping (String, AXError) -> Void, isActive: @escaping () -> Bool) {
-            self.window = window; self.processID = processID; self.result = result; self.isActive = isActive
+        init(window: AXUIElement, application: AXUIElement, processID: Int32, assistiveTechnologyEnabled: Bool,
+             result: @escaping (String, AXError) -> Void, modeDiagnostic: @escaping (String) -> Void,
+             isActive: @escaping () -> Bool) {
+            self.window = window; self.application = application; self.processID = processID
+            self.assistiveTechnologyEnabled = assistiveTechnologyEnabled
+            self.result = result; self.modeDiagnostic = modeDiagnostic; self.isActive = isActive
+        }
+        func withImmediateUpdates(isCurrent: () -> Bool, _ body: () -> Void) -> Bool {
+            WindowSnapImmediateUpdates.perform(assistiveTechnologyEnabled: assistiveTechnologyEnabled,
+                isEligible: { isCurrent() && self.isEligibleAndActive() && isCurrent() },
+                readMode: {
+                    var value: CFTypeRef?
+                    let error = AXUIElementCopyAttributeValue(self.application, "AXEnhancedUserInterface" as CFString, &value)
+                    self.result("enhanced_ui_read", error)
+                    guard error == .success, let value, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+                    return value as? Bool
+                }, writeMode: { enabled in
+                    let error = AXUIElementSetAttributeValue(self.application, "AXEnhancedUserInterface" as CFString,
+                        enabled ? kCFBooleanTrue : kCFBooleanFalse)
+                    self.result(enabled ? "enhanced_ui_restore" : "enhanced_ui_disable", error)
+                    return error == .success
+                }, diagnostic: modeDiagnostic, body: body)
         }
         func isEligibleAndActive() -> Bool {
             AXIsProcessTrusted() && isActive() && Self.eligible(window, result: result)

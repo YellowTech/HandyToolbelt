@@ -100,6 +100,14 @@ final class WindowSnappingTests: XCTestCase {
         var duringEveryRead: (() -> Void)?
         var duringSize: (() -> Void)?
         var clampsSize = false
+        var minimumSize: CGSize?
+        var bounds: CGRect?
+        var positionBounds: CGRect?
+        var duringPosition: (() -> Void)?
+        var rejectsFirstPosition = false
+        var sizeAllowed = true
+        var positionAllowed = true
+        var requestedPositions: [CGPoint] = []
         func isEligibleAndActive() -> Bool { eligible }
         func readFrame() -> CGRect? {
             duringEveryRead?()
@@ -109,24 +117,242 @@ final class WindowSnappingTests: XCTestCase {
         func setSize(_ size: CGSize) -> Bool {
             writes.append("size")
             requestedSizes.append(size)
+            guard sizeAllowed else { return false }
             rect.size = size
-            if clampsSize && requestedSizes.count == 1 { rect.size.width += 40 }
-            duringSize?(); return true
+            if let minimumSize {
+                rect.size.width = max(rect.width, minimumSize.width)
+                rect.size.height = max(rect.height, minimumSize.height)
+            }
+            if clampsSize { rect.size.width = min(size.width, 1000) }
+            if let bounds {
+                rect.size.width = min(rect.width, bounds.maxX - rect.minX)
+                rect.size.height = min(rect.height, bounds.maxY - rect.minY)
+            }
+            duringSize?()
+            return true
         }
-        func setPosition(_ point: CGPoint) -> Bool { writes.append("position"); rect.origin = point; return true }
+        func setPosition(_ point: CGPoint) -> Bool {
+            writes.append("position")
+            requestedPositions.append(point)
+            guard positionAllowed else { return false }
+            if rejectsFirstPosition {
+                rejectsFirstPosition = false
+                return false
+            }
+            rect.origin = point
+            if let positionBounds {
+                rect.origin.x = min(point.x, positionBounds.maxX - rect.width)
+                rect.origin.y = min(point.y, positionBounds.maxY - rect.height)
+            }
+            duringPosition?()
+            return true
+        }
+    }
+    /// AX exposes the requested attribute immediately, but commits a complete
+    /// owner frame later. A second attribute before that commit uses stale peers.
+    private final class CoupledAsyncWindow: WindowSnapWindowAccess {
+        let processID: Int32 = 42
+        var committed = CGRect(x: 1695, y: 309, width: 1747, height: 1130)
+        var reported = CGRect(x: 1695, y: 309, width: 1747, height: 1130)
+        var pending: CGRect?
+        var writes: [String] = []
+        private var ticksUntilCommit = 0
+        var commitDelay = 3
+        var eligible = true
+        var fastEnabled = false
+        var fastLeases = 0
+        func withImmediateUpdates(isCurrent: () -> Bool, _ body: () -> Void) -> Bool {
+            guard fastEnabled, isCurrent(), eligible else { return false }
+            fastLeases += 1
+            body()
+            return true
+        }
+        func isEligibleAndActive() -> Bool { eligible }
+        func readFrame() -> CGRect? { reported }
+        func setPosition(_ point: CGPoint) -> Bool {
+            writes.append("position")
+            var next = committed
+            next.origin = point
+            reported = next
+            pending = next
+            ticksUntilCommit = commitDelay
+            return true
+        }
+        func setSize(_ size: CGSize) -> Bool {
+            writes.append("size")
+            var next = committed
+            next.size = CGSize(width: size.width.rounded(), height: size.height.rounded())
+            reported = next
+            pending = next
+            ticksUntilCommit = commitDelay
+            return true
+        }
+        func tick() {
+            guard let pending else { return }
+            ticksUntilCommit -= 1
+            if ticksUntilCommit == 0 {
+                committed = pending
+                reported = pending
+                self.pending = nil
+            }
+        }
+    }
+    func testLoggedRightHalfWithCoupledAsyncOwnerSettlesBetweenAttributes() {
+        for delay in [2, 3] {
+            let window = CoupledAsyncWindow()
+            window.commitDelay = delay
+            let target = CGRect(x: 926.5, y: 39, width: 873.5, height: 1130)
+            var application = WindowSnapApplication(target: target)
+            var succeeded = false
+            for _ in 0..<45 {
+                window.tick()
+                let result = application.advance(window: window, isCurrent: { true })
+                if case .succeeded = result { succeeded = true; break }
+                if case .limited = result { break }
+                if case .failed = result { break }
+            }
+            XCTAssertTrue(succeeded)
+            XCTAssertTrue(WindowSnapApplication.matches(window.committed, target))
+            XCTAssertEqual(window.writes, ["position", "size"])
+            XCTAssertNil(window.pending, "Success must follow the actual native commit")
+        }
+    }
+    func testSingleFastBatchFallsBackWhenCoupledAsyncOwnerIgnoresImmediateMode() {
+        for delay in [2, 3] {
+            let window = CoupledAsyncWindow(); window.fastEnabled = true; window.commitDelay = delay
+            let target = CGRect(x: 926.5, y: 39, width: 873.5, height: 1130)
+            var application = WindowSnapApplication(target: target)
+            var stages: [String] = []
+            var succeeded = false
+            for _ in 0..<50 {
+                window.tick()
+                let result = application.advance(window: window, diagnostic: { stage, _ in stages.append(stage) }, isCurrent: { true })
+                if case .succeeded = result { succeeded = true; break }
+                if case .failed = result { break }
+                if case .limited = result { break }
+            }
+            XCTAssertTrue(succeeded)
+            XCTAssertEqual(window.fastLeases, 1)
+            XCTAssertEqual(stages.filter { $0 == "fast_fallback" }.count, 1)
+            XCTAssertTrue(WindowSnapApplication.matches(window.committed, target))
+            XCTAssertNil(window.pending)
+            XCTAssertEqual(application.attempts, 2)
+        }
+    }
+    func testAlreadyExactInitialFrameNeedsOnlySpacedObservations() {
+        let window = FakeWindow(); window.rect = visible
+        var application = WindowSnapApplication(target: visible)
+        if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+        XCTAssertTrue(window.writes.isEmpty)
+        if case .succeeded = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+        XCTAssertTrue(window.writes.isEmpty)
+        XCTAssertEqual(application.attempts, 0)
+    }
+    func testCancellationLeavesPendingNativeCommitButPreventsFollowingToolWrites() {
+        for cancelAfterSize in [false, true] {
+            let window = CoupledAsyncWindow()
+            let target = CGRect(x: 926.5, y: 39, width: 873.5, height: 1130)
+            var application = WindowSnapApplication(target: target)
+            while window.writes.count < (cancelAfterSize ? 2 : 1) {
+                window.tick()
+                if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail(); return }
+            }
+            XCTAssertNotNil(window.pending)
+            let writes = window.writes
+            if case .failed = application.advance(window: window, isCurrent: { false }) {} else { XCTFail() }
+            // The owner still completes already accepted native work after cancel.
+            for _ in 0..<3 { window.tick() }
+            XCTAssertNil(window.pending)
+            if case .failed = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+            XCTAssertEqual(window.writes, writes)
+        }
     }
     /// Drives the production transaction through its bounded scheduled observations.
     private func apply(target: CGRect, window: WindowSnapWindowAccess, isCurrent: () -> Bool) -> Bool {
         var application = WindowSnapApplication(target: target)
-        for _ in 0..<10 {
+        for _ in 0..<45 {
             switch application.advance(window: window, isCurrent: isCurrent) {
             case .pending: continue
             case .succeeded: return true
-            case .failed: return false
+            case .limited, .failed: return false
             }
         }
         XCTFail("Application did not terminate within its bounded observations")
         return false
+    }
+    func testLoggedMenuBarDragQualifiesDespiteRepeatedAndLaggingAXFrames() {
+        let initial = CGRect(x: 926, y: 39, width: 874, height: 1130)
+        let down = CGPoint(x: 1020.7617, y: 61.9063)
+        var drag = WindowSnapDrag(initial: initial, down: down, earlierFrame: initial)
+        let samples: [(Double, CGFloat, CGFloat, CGFloat, CGFloat)] = [
+            (0.1167, 926, 39, 1020.7617, 62.0156),
+            (0.1505, 926, 39, 1020.7617, 66.9922),
+            (0.1853, 926, 39, 997.8438, 111.8789),
+            (0.2227, 926, 39, 965.7188, 134.75),
+            (0.2564, 860, 112, 931.7344, 126.7852),
+            (0.2900, 860, 112, 881.3438, 46.6875),
+            (0.3238, 860, 112, 844.3672, 0),
+            (0.3635, 722, 39, 818.4805, 0),
+            (0.3937, 722, 39, 815.4531, 0),
+            (0.4162, 715, 39, 815.4531, 0)]
+        for (time, x, y, px, py) in samples {
+            _ = drag.observe(frame: CGRect(x: x, y: y, width: 874, height: 1130),
+                pointer: CGPoint(x: px, y: py), topBoundary: 39, time: time)
+        }
+        XCTAssertTrue(drag.confirmed)
+        let screen = CGRect(x: 0, y: 0, width: 1800, height: 1169)
+        let visible = CGRect(x: 53, y: 39, width: 1747, height: 1130)
+        XCTAssertEqual(drag.target(pointer: CGPoint(x: 815.4531, y: 0), screen: screen, visible: visible), visible)
+    }
+    func testUpwardExcursionBeforeDelayedQualificationPreservesTitlebarTopIntent() {
+        let initial = CGRect(x: 100, y: 39, width: 600, height: 400)
+        var drag = WindowSnapDrag(initial: initial, down: CGPoint(x: 200, y: 59))
+        XCTAssertFalse(drag.observe(frame: CGRect(x: 100, y: 139, width: 600, height: 400),
+            pointer: CGPoint(x: 400, y: 159), topBoundary: 39, time: 0.05))
+        XCTAssertFalse(drag.observe(frame: CGRect(x: 110, y: 39, width: 600, height: 400),
+            pointer: CGPoint(x: 600, y: 159), topBoundary: 39, time: 0.10))
+        XCTAssertTrue(drag.observe(frame: CGRect(x: 130, y: 39, width: 600, height: 400),
+            pointer: CGPoint(x: 230, y: 59), topBoundary: 39, time: 0.15))
+        let visible = CGRect(x: 0, y: 39, width: 1200, height: 761)
+        XCTAssertEqual(drag.target(pointer: CGPoint(x: 230, y: 59),
+            screen: CGRect(x: 0, y: 0, width: 1200, height: 800), visible: visible), visible)
+    }
+    func testLagHistoryExpiresAndClockResetCannotReusePointerEvidence() {
+        let initial = CGRect(x: 926, y: 39, width: 874, height: 1130)
+        for invalidTime in [1.0, 0.20, Double.nan] {
+            var drag = WindowSnapDrag(initial: initial, down: CGPoint(x: 1020.7617, y: 61.9063))
+            for (time, x, y) in [(0.1167, 1020.7617, 62.0156), (0.1505, 1020.7617, 66.9922),
+                                  (0.1853, 997.8438, 111.8789), (0.2227, 965.7188, 134.75)] {
+                XCTAssertFalse(drag.observe(frame: initial, pointer: CGPoint(x: x, y: y), topBoundary: 39, time: time))
+            }
+            XCTAssertFalse(drag.observe(frame: CGRect(x: 860, y: 112, width: 874, height: 1130),
+                pointer: CGPoint(x: 931.7344, y: 126.7852), topBoundary: 39, time: invalidTime))
+        }
+    }
+    func testLagHistoryNeverQualifiesStationaryContentOrResizedWindow() {
+        let initial = CGRect(x: 926, y: 39, width: 874, height: 1130)
+        let down = CGPoint(x: 1020.7617, y: 61.9063)
+        var stationary = WindowSnapDrag(initial: initial, down: down)
+        var resized = WindowSnapDrag(initial: initial, down: down)
+        for index in 0..<100 {
+            let pointer = CGPoint(x: down.x - CGFloat(index) * 10, y: down.y + CGFloat(index % 7) * 20)
+            let time = Double(index) * 0.01
+            XCTAssertFalse(stationary.observe(frame: initial, pointer: pointer, topBoundary: 39, time: time))
+            var frame = initial
+            if index == 3 { frame.size.width += 20 }
+            if index > 3 { frame.origin.x -= CGFloat(index) * 10 }
+            XCTAssertFalse(resized.observe(frame: frame, pointer: pointer, topBoundary: 39, time: time))
+        }
+        XCTAssertTrue(resized.invalidated)
+    }
+    func testLaggedHorizontalMovementAtTopDoesNotMaximizeWithoutUpwardIntent() {
+        let initial = CGRect(x: 926, y: 39, width: 874, height: 1130)
+        var drag = WindowSnapDrag(initial: initial, down: CGPoint(x: 1020, y: 45))
+        XCTAssertFalse(drag.observe(frame: initial, pointer: CGPoint(x: 1020, y: 45), topBoundary: 39, time: 0.1))
+        XCTAssertFalse(drag.observe(frame: initial, pointer: CGPoint(x: 970, y: 45), topBoundary: 39, time: 0.15))
+        XCTAssertTrue(drag.observe(frame: initial.offsetBy(dx: -50, dy: 0), pointer: CGPoint(x: 900, y: 45), topBoundary: 39, time: 0.2))
+        XCTAssertNil(drag.target(pointer: CGPoint(x: 900, y: 45), screen: CGRect(x: 0, y: 0, width: 1800, height: 1169),
+            visible: CGRect(x: 53, y: 39, width: 1747, height: 1130)))
     }
     func testConfirmedMoveSurvivesTitlebarClampingAndCommits() {
         let window = FakeWindow()
@@ -136,7 +362,7 @@ final class WindowSnappingTests: XCTestCase {
         window.rect.origin.y = 25 // AppKit clamps at menu bar while pointer continues to screen edge.
         XCTAssertTrue(drag.observe(frame: window.rect, pointer: CGPoint(x: 200, y: 1)))
         XCTAssertTrue(apply(target: visible, window: window, isCurrent: { true }))
-        XCTAssertEqual(window.writes, ["size", "position"])
+        XCTAssertEqual(window.writes, ["position", "size"])
         XCTAssertEqual(window.rect, visible)
     }
     func testMenuBarReleaseCommitsButLeavingBandCancelsTarget() {
@@ -195,7 +421,7 @@ final class WindowSnappingTests: XCTestCase {
         let target = recovered.target(pointer: release, screen: screen, visible: visible)
         XCTAssertEqual(target, visible)
         XCTAssertTrue(apply(target: target!, window: window, isCurrent: { true }))
-        XCTAssertEqual(window.writes, ["size", "position"])
+        XCTAssertEqual(window.writes, ["position", "size"])
         var stationary = WindowSnapDrag(initial: delayedAX, down: down, earlierFrame: delayedAX)
         XCTAssertFalse(stationary.observe(frame: delayedAX, pointer: release, topBoundary: 25))
         var mismatchedSize = WindowSnapDrag(initial: delayedAX, down: down,
@@ -277,29 +503,19 @@ final class WindowSnappingTests: XCTestCase {
         XCTAssertFalse(apply(target: visible, window: window, isCurrent: { session.isCurrent(token) }))
         XCTAssertTrue(window.writes.isEmpty)
     }
-    func testCancellationDuringIssuedSizePreventsSecondWriteAndUnsupportedSizeDoesNotMove() {
-        let window = FakeWindow()
-        var session = WindowSnapSession()
-        let token = session.generation
-        window.rect.origin.x += 20
-        window.duringSize = { session.invalidate() }
-        XCTAssertFalse(apply(target: visible, window: window, isCurrent: { session.isCurrent(token) }))
-        XCTAssertEqual(window.writes, ["size"])
-        let limited = FakeWindow(); limited.clampsSize = true
-        limited.rect.origin.x += 20
-        XCTAssertFalse(apply(target: visible, window: limited, isCurrent: { true }))
-        XCTAssertEqual(limited.writes, ["size", "size"])
-        XCTAssertEqual(limited.requestedSizes, [visible.size, CGSize(width: 600, height: 400)])
-        XCTAssertEqual(limited.rect.size, CGSize(width: 600, height: 400))
-    }
-    func testCancellationDuringUnsupportedSizeReadbackPreventsRestore() {
-        let window = FakeWindow(); window.clampsSize = true
-        var session = WindowSnapSession()
-        let token = session.generation
-        window.rect.origin.x += 20
-        window.duringReadback = { session.invalidate() }
-        XCTAssertFalse(apply(target: visible, window: window, isCurrent: { session.isCurrent(token) }))
-        XCTAssertEqual(window.writes, ["size"], "Cancellation prevents both restore and position")
+    func testCancellationAndEligibilityLossStopBetweenEffects() {
+        for effect in ["position", "size", "readback"] {
+            for permissionLoss in [false, true] {
+                let window = FakeWindow()
+                var current = true
+                let cancel = { if permissionLoss { window.eligible = false } else { current = false } }
+                if effect == "position" { window.duringPosition = cancel }
+                if effect == "size" { window.duringSize = cancel }
+                if effect == "readback" { window.duringReadback = cancel }
+                XCTAssertFalse(apply(target: visible, window: window, isCurrent: { current }))
+                XCTAssertEqual(window.writes, effect == "size" ? ["position", "size"] : ["position"])
+            }
+        }
     }
     func testCancellationDuringInitialReadPreventsFirstWrite() {
         let window = FakeWindow()
@@ -308,41 +524,189 @@ final class WindowSnappingTests: XCTestCase {
         XCTAssertFalse(apply(target: visible, window: window, isCurrent: { current }))
         XCTAssertTrue(window.writes.isEmpty)
     }
+    func testLoggedOriginDependentSizeConstraintsRecover() {
+        let bounds = CGRect(x: -805, y: -1620, width: 2880, height: 1620)
+        let cases: [(CGRect, CGRect)] = [
+            (CGRect(x: -651, y: -1620, width: 2271, height: 1211), bounds),
+            (CGRect(x: -666, y: -1620, width: 2271, height: 1211), bounds),
+            (CGRect(x: -1243, y: -1239, width: 2271, height: 1211), CGRect(x: -805, y: -1620, width: 1440, height: 1620))]
+        for (original, target) in cases {
+            let window = FakeWindow(); window.rect = original; window.bounds = bounds
+            XCTAssertTrue(apply(target: target, window: window, isCurrent: { true }))
+            XCTAssertEqual(window.rect, target)
+        }
+    }
     func testStableApplicationRepairsAcceptedWritesRolledBackByOwner() {
         let window = FakeWindow()
         var application = WindowSnapApplication(target: visible)
-        if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+        while window.writes.count < 2 {
+            if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail(); return }
+        }
         // Native drag completion restores its stale frame after successful setters.
         window.rect = CGRect(x: 100, y: 100, width: 600, height: 400)
-        if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+        if case .succeeded = finishApplication(&application, window: window) {} else { XCTFail() }
         XCTAssertEqual(application.attempts, 2)
-        if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
-        if case .succeeded = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
         XCTAssertEqual(window.rect, visible)
     }
     func testUnstableApplicationHasBoundedRetriesAndCancellationStopsWrites() {
         let window = FakeWindow()
         let original = window.rect
+        window.duringEveryRead = { window.rect = original }
         var application = WindowSnapApplication(target: visible)
-        for _ in 0..<3 {
-            window.rect = original
-            if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
-        }
-        window.rect = original
-        if case .failed = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+        if case .failed = finishApplication(&application, window: window) {} else { XCTFail() }
+        XCTAssertEqual(window.writes.count, 9, "Three move/size/correction passes at most")
         XCTAssertEqual(application.attempts, 3)
         let writes = window.writes
         if case .failed = application.advance(window: window, isCurrent: { false }) {} else { XCTFail() }
         XCTAssertEqual(window.writes, writes)
     }
-    func testStableApplicationStopsAtSizeConstraintsAndNeverMoves() {
-        let window = FakeWindow(); window.clampsSize = true
+    private func finishApplication(_ application: inout WindowSnapApplication, window: FakeWindow) -> WindowSnapApplication.Result {
+        for _ in 0..<45 {
+            let result = application.advance(window: window, isCurrent: { true })
+            if case .pending = result { continue }
+            return result
+        }
+        XCTFail("Application exceeded its observation bound")
+        return .failed
+    }
+    func testMinAndMaxConstraintsRetainAttainedFrameWithoutOriginalRequests() {
+        for minimum in [false, true] {
+            let window = FakeWindow()
+            let original = window.rect
+            let target = minimum ? CGRect(x: 600, y: 400, width: 600, height: 400) : visible
+            if minimum {
+                window.rect.size = CGSize(width: 800, height: 600)
+                window.minimumSize = CGSize(width: 700, height: 500)
+            }
+            else { window.clampsSize = true }
+            var application = WindowSnapApplication(target: target)
+            if case .limited = finishApplication(&application, window: window) {} else { XCTFail() }
+            XCTAssertNotEqual(window.rect, original)
+            XCTAssertEqual(window.rect.origin, target.origin)
+            XCTAssertEqual(window.requestedSizes, Array(repeating: target.size, count: 3))
+            XCTAssertTrue(window.requestedPositions.allSatisfy { $0 == target.origin })
+            XCTAssertEqual(application.attempts, 3)
+            let writes = window.writes
+            if case .limited = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+            XCTAssertEqual(window.writes, writes)
+        }
+    }
+    func testMinimumHeightWithPositionClampingRetainsNearestAttainedFrame() {
+        let window = FakeWindow()
+        window.rect = CGRect(x: 100, y: 100, width: 600, height: 600)
+        window.minimumSize = CGSize(width: 100, height: 500)
+        window.bounds = screen
+        window.positionBounds = screen
+        let target = CGRect(x: 600, y: 400, width: 600, height: 400)
+        var application = WindowSnapApplication(target: target)
+        if case .limited = finishApplication(&application, window: window) {} else { XCTFail() }
+        XCTAssertEqual(window.rect, CGRect(x: 600, y: 300, width: 600, height: 500))
+        XCTAssertEqual(window.requestedSizes, Array(repeating: target.size, count: 3))
+        XCTAssertTrue(window.requestedPositions.allSatisfy { $0 == target.origin })
+    }
+    func testAlternatingExactAndNonexactObservationsTerminateWithoutMoreWrites() {
+        let window = FakeWindow()
         let original = window.rect
         var application = WindowSnapApplication(target: visible)
         if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+        let writes = window.writes
+        var terminated = false
+        for index in 0..<45 {
+            window.rect = index.isMultiple(of: 2) ? visible : original
+            if case .failed = application.advance(window: window, isCurrent: { true }) {
+                terminated = true
+                break
+            }
+        }
+        XCTAssertTrue(terminated)
+        XCTAssertEqual(window.writes, writes, "An unsettled move cannot issue a resize")
         if case .failed = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
-        XCTAssertEqual(window.writes, ["size", "size"])
-        XCTAssertEqual(window.rect, original)
+        XCTAssertEqual(window.writes, writes)
+    }
+    func testCancellationWhileMoveOrSizeIsPendingStopsFollowingPhases() {
+        for afterSize in [false, true] {
+            let window = FakeWindow()
+            var application = WindowSnapApplication(target: visible)
+            while window.writes.count < (afterSize ? 2 : 1) {
+                if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail(); return }
+            }
+            let writes = window.writes
+            if case .failed = application.advance(window: window, isCurrent: { false }) {} else { XCTFail() }
+            if case .failed = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+            XCTAssertEqual(window.writes, writes)
+        }
+    }
+    func testCancellationAndEligibilityLossDuringCorrectionAndSizeReadback() {
+        for duringCorrection in [false, true] {
+            for permissionLoss in [false, true] {
+                let window = FakeWindow(); window.rect = screen; window.positionBounds = screen
+                var current = true
+                let cancel = { if permissionLoss { window.eligible = false } else { current = false } }
+                if duringCorrection {
+                    window.duringPosition = { if window.writes.count == 3 { cancel() } }
+                } else {
+                    window.duringReadback = { if window.writes.last == "size" { cancel() } }
+                }
+                let target = CGRect(x: 600, y: 400, width: 600, height: 400)
+                XCTAssertFalse(apply(target: target, window: window, isCurrent: { current }))
+                XCTAssertEqual(window.writes, duringCorrection ? ["position", "size", "position"] : ["position", "size"])
+            }
+        }
+    }
+    func testDeniedSizeAfterSuccessfulMoveRetainsPartialResult() {
+        let window = FakeWindow(); window.sizeAllowed = false
+        let originalSize = window.rect.size
+        var application = WindowSnapApplication(target: visible)
+        if case .limited = finishApplication(&application, window: window) {} else { XCTFail() }
+        XCTAssertEqual(window.rect.origin, visible.origin)
+        XCTAssertEqual(window.rect.size, originalSize)
+        XCTAssertEqual(window.writes, ["position", "size"])
+        XCTAssertEqual(application.attempts, 1)
+    }
+    func testDeniedCorrectionAfterResizeRetainsAttainedFrame() {
+        let window = FakeWindow()
+        window.rect = screen
+        window.positionBounds = screen
+        window.duringSize = { window.positionAllowed = false }
+        let target = CGRect(x: 600, y: 400, width: 600, height: 400)
+        var application = WindowSnapApplication(target: target)
+        if case .limited = finishApplication(&application, window: window) {} else { XCTFail() }
+        XCTAssertEqual(window.rect.size, target.size)
+        XCTAssertEqual(window.writes, ["position", "size", "position"])
+    }
+    func testAllDeniedAndNoEffectStayFailureAndTerminal() {
+        for denied in [true, false] {
+            let window = FakeWindow(); let original = window.rect
+            if denied { window.positionAllowed = false; window.sizeAllowed = false }
+            else { window.duringPosition = { window.rect = original }; window.duringSize = { window.rect = original } }
+            var application = WindowSnapApplication(target: visible)
+            if case .failed = finishApplication(&application, window: window) {} else { XCTFail() }
+            let writes = window.writes
+            if case .failed = application.advance(window: window, isCurrent: { true }) {} else { XCTFail() }
+            XCTAssertEqual(window.writes, writes)
+        }
+    }
+    func testDelayedSizeReadbackAllowsOriginCorrectionAndSettles() {
+        let window = FakeWindow(); window.rect = screen; window.positionBounds = screen
+        let original = window.rect
+        window.duringSize = { window.rect.size = original.size; window.duringSize = nil }
+        let target = CGRect(x: 600, y: 400, width: 600, height: 400)
+        var application = WindowSnapApplication(target: target)
+        while window.writes.count < 2 {
+            if case .pending = application.advance(window: window, isCurrent: { true }) {} else { XCTFail(); return }
+        }
+        XCTAssertEqual(window.writes, ["position", "size"])
+        window.rect.size = target.size
+        if case .succeeded = finishApplication(&application, window: window) {} else { XCTFail() }
+        XCTAssertEqual(application.attempts, 1)
+        XCTAssertEqual(window.writes, ["position", "size", "position"])
+    }
+    func testOversizedWindowMovesThenShrinksThenCorrectsRightBottomPosition() {
+        let window = FakeWindow(); window.rect = screen; window.positionBounds = screen
+        let target = CGRect(x: 600, y: 400, width: 600, height: 400)
+        XCTAssertTrue(apply(target: target, window: window, isCurrent: { true }))
+        XCTAssertEqual(window.writes, ["position", "size", "position"])
+        XCTAssertEqual(window.rect, target)
     }
     func testZones() {
         XCTAssertEqual(WindowSnapping.target(pointer: CGPoint(x: 0, y: 300), screen: screen, visible: visible), CGRect(x: 0, y: 25, width: 600, height: 725))
