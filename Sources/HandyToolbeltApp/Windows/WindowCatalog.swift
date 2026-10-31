@@ -32,6 +32,7 @@ final class WindowCatalog {
     private var metadataGeneration: UInt64 = 0 // Protected by cancellationLock.
     private var windows: [NativeWindow] = [] // Owned by queue.
     private var history: [UUID] = []
+    private var nextScanAppOffset = 0 // Worker-owned fairness after a shared read budget is exhausted.
     private var observers: [pid_t: AXObserver] = [:]
     private var enabled = false
     private let cancellationLock = NSLock()
@@ -152,7 +153,7 @@ final class WindowCatalog {
         stateLock.lock(); let generation = stateGeneration; let revision = focusRevision; let processRevisions = processFocusRevision; stateLock.unlock()
         let local = MainWindowPresence.shared.snapshot(includeFrame: includePreviewMetadata)
         let apps = NSWorkspace.shared.runningApplications.compactMap { app -> AppInfo? in
-            guard app.activationPolicy == .regular, !app.isTerminated, app.processIdentifier != getpid() else { return nil }
+            guard app.activationPolicy != .prohibited, !app.isTerminated, app.processIdentifier != getpid() else { return nil }
             return AppInfo(pid: app.processIdentifier, name: app.localizedName ?? "Application", bundle: app.bundleIdentifier ?? "", hidden: app.isHidden)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         let focusedPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -163,21 +164,40 @@ final class WindowCatalog {
             var unavailablePIDs = Set<pid_t>()
             var focusedID: UUID?
             var scanFocus: [pid_t: UUID] = [:]
+            let eligibilityBudget = EligibilityReadBudget()
+            var scanOrder = EligibilityScanOrder(count: apps.count, startOffset: self.nextScanAppOffset)
+            var visibleWindows: [VisibleWindowEvidence]?
+            func visibleEvidence() -> [VisibleWindowEvidence] {
+                if let visibleWindows { return visibleWindows }
+                let snapshot = Self.visibleWindowEvidence(); visibleWindows = snapshot; return snapshot
+            }
             let livePIDs = Set(apps.map(\.pid))
             for pid in Array(self.observers.keys) where !livePIDs.contains(pid) {
                 if let observer = self.observers.removeValue(forKey: pid) { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) }
             }
-            for app in apps {
+            for appIndex in scanOrder.indices {
+                let app = apps[appIndex]
                 guard self.matchesGeneration(generation) else { return }
+                guard eligibilityBudget.available else {
+                    scanOrder.exhausted(at: appIndex)
+                    unavailable += 1; unavailablePIDs.insert(app.pid); continue
+                }
                 let element = AXUIElementCreateApplication(app.pid)
                 AXUIElementSetMessagingTimeout(element, 0.12)
                 guard let elements: [AXUIElement] = self.attribute(element, kAXWindowsAttribute) else { unavailable += 1; unavailablePIDs.insert(app.pid); continue }
                 self.observe(app.pid, element: element)
                 let focused: AXUIElement? = self.attribute(element, kAXFocusedWindowAttribute)
-                for window in Self.deduplicatedElements(elements) {
+                let unique = Self.deduplicatedElements(elements)
+                for window in unique.prefix(512) { AXUIElementSetMessagingTimeout(window, 0.12) }
+                let classification = self.eligibleElements(unique, processID: app.pid, focused: focused,
+                    current: { self.matchesGeneration(generation) }, budget: eligibilityBudget, visible: visibleEvidence)
+                guard self.matchesGeneration(generation) else { return }
+                if classification.incomplete {
+                    unavailable += 1; unavailablePIDs.insert(app.pid)
+                    if !eligibilityBudget.available { scanOrder.exhausted(at: appIndex) }
+                }
+                for window in classification.elements {
                     guard self.matchesGeneration(generation) else { return }
-                    AXUIElementSetMessagingTimeout(window, 0.12)
-                    guard self.isEligible(window) else { continue }
                     let id = self.windows.first { $0.item.processID == app.pid && ($0.element.map { CFEqual($0, window) } ?? false) }?.item.id ?? UUID()
                     let title: String = self.attribute(window, kAXTitleAttribute) ?? ""
                     let minimized: Bool = self.attribute(window, kAXMinimizedAttribute) ?? false
@@ -193,17 +213,22 @@ final class WindowCatalog {
                     }
                 }
             }
+            self.nextScanAppOffset = scanOrder.nextStartOffset
+            // Budget rotation affects work order, not the chooser's stable alphabetical fallback order.
+            let appOrder = Dictionary(uniqueKeysWithValues: apps.enumerated().map { ($0.element.pid, $0.offset) })
+            result = Self.catalogueOrder(result, appOrder: appOrder, processID: { $0.item.processID })
             if let local {
                 result.append(NativeWindow(item: local.item, element: nil))
                 if local.focused { focusedID = local.item.id }
             }
             self.stateLock.lock()
             let dead = self.destroyedElements
-            result += Self.retainedDuringEnumerationFailure(self.windows, unavailablePIDs: unavailablePIDs,
+            let collectedIDs = Set(result.map { $0.item.id })
+            result += Self.retainedDuringEnumerationFailure(self.windows.filter { !collectedIDs.contains($0.item.id) }, unavailablePIDs: unavailablePIDs,
                 livePIDs: livePIDs, processID: { $0.item.processID },
                 destroyed: { window in dead.contains { element in window.element.map { CFEqual(element, $0) } == true } })
             result.removeAll { window in dead.contains { element in window.element.map { CFEqual(element, $0) } == true } }
-            if let focusedPID, unavailablePIDs.contains(focusedPID) { focusedID = self.focusedByProcess[focusedPID] }
+            if let focusedPID, unavailablePIDs.contains(focusedPID), scanFocus[focusedPID] == nil { focusedID = self.focusedByProcess[focusedPID] }
             self.stateLock.unlock()
             self.windows = result
             let ids = Set(result.map { $0.item.id })
@@ -311,6 +336,7 @@ final class WindowCatalog {
             let minimized: Bool = window.element.flatMap { self.attribute($0, kAXMinimizedAttribute) } ?? window.item.isMinimized
             let application = local ? nil : AXUIElementCreateApplication(window.item.processID)
             if let application { AXUIElementSetMessagingTimeout(application, 0.12) }
+            let eligibilityBudget = EligibilityReadBudget()
             let coordinator = WindowActivationCoordinator(
                 origin: expectedProcessID, target: window.item.processID, local: local,
                 minimized: minimized, name: window.item.appName,
@@ -326,7 +352,8 @@ final class WindowCatalog {
                     available: {
                         guard self.isAccepting, AXIsProcessTrusted(),
                               let app = NSRunningApplication(processIdentifier: window.item.processID), !app.isTerminated else { return false }
-                        return local || window.element.map { self.isEligible($0) } == true
+                        return local || window.element.map { self.isEligible($0, processID: window.item.processID,
+                            current: { self.activationToken() == token && self.isAccepting }, budget: eligibilityBudget) } == true
                     },
                     restore: { window.element.map { AXUIElementSetAttributeValue($0, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success } ?? false },
                     unhide: { NSRunningApplication(processIdentifier: window.item.processID)?.unhide() },
@@ -379,18 +406,170 @@ final class WindowCatalog {
         return unique
     }
 
-    private func isEligible(_ element: AXUIElement) -> Bool {
-        let role: String? = attribute(element, kAXRoleAttribute)
-        let subrole: String? = attribute(element, kAXSubroleAttribute)
-        // Standard windows need no extra AX calls, including minimized/hidden windows or other Spaces.
-        if WindowEligibility.isEligible(role: role, subrole: subrole) { return true }
-        guard role == kAXWindowRole, subrole == kAXDialogSubrole else { return false }
-        let isMain: Bool? = attribute(element, kAXMainAttribute)
-        if isMain == true { return true }
-        var settable: DarwinBoolean = false
-        let result = AXUIElementIsAttributeSettable(element, kAXMainAttribute as CFString, &settable)
-        let mainIsSettable: Bool? = result == .success ? settable.boolValue : nil
-        return WindowEligibility.isEligible(role: role, subrole: subrole, isMain: isMain, mainIsSettable: mainIsSettable)
+    /// WindowServer metadata only: no image capture or Screen Recording permission.
+    /// Called on a catalogue/activation worker, at most once per discovery pass.
+    static func visibleWindowEvidence() -> [VisibleWindowEvidence] {
+        guard let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        return visibleWindowEvidence(rows: rows)
+    }
+
+    static func visibleWindowEvidence(rows: [[String: Any]]) -> [VisibleWindowEvidence] {
+        rows.compactMap { row in
+            guard let pid = row[kCGWindowOwnerPID as String] as? NSNumber,
+                  let layer = row[kCGWindowLayer as String] as? NSNumber, layer.intValue >= 0,
+                  let alpha = row[kCGWindowAlpha as String] as? NSNumber, alpha.doubleValue.isFinite, alpha.doubleValue > 0,
+                  let bounds = row[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds), WindowEligibility.validFrame(frame) else { return nil }
+            return VisibleWindowEvidence(processID: pid.int32Value, frame: frame, title: row[kCGWindowName as String] as? String)
+        }
+    }
+
+    struct EligibilityScanOrder {
+        let indices: [Int]
+        private(set) var nextStartOffset = 0
+        private var hasResume = false
+        init(count: Int, startOffset: Int) {
+            let start = count == 0 ? 0 : startOffset % count
+            indices = Array(start..<count) + Array(0..<start)
+        }
+        mutating func exhausted(at index: Int) {
+            guard !hasResume else { return }
+            hasResume = true; nextStartOffset = index
+        }
+    }
+    static func catalogueOrder<Handle>(_ handles: [Handle], appOrder: [pid_t: Int], processID: (Handle) -> pid_t) -> [Handle] {
+        handles.sorted { (appOrder[processID($0)] ?? Int.max) < (appOrder[processID($1)] ?? Int.max) }
+    }
+
+    enum EligibilityAttribute { case role, subrole, position, size, title, main, minimized }
+    /// Worker-owned accounting spans all apps in a scan (or all revalidations of an activation).
+    final class EligibilityReadBudget {
+        let maximumQueries: Int
+        let maximumDuration: TimeInterval
+        private(set) var queries = 0
+        private(set) var duration: TimeInterval = 0
+        init(maximumQueries: Int = 2048, maximumDuration: TimeInterval = 1.2) {
+            self.maximumQueries = maximumQueries; self.maximumDuration = maximumDuration
+        }
+        var available: Bool { queries < maximumQueries && duration < maximumDuration }
+        func record(duration: TimeInterval) { queries += 1; self.duration += max(0, duration) }
+    }
+    struct EligibilityCollection { var indices: Set<Int>; var incomplete: Bool }
+
+    /// Production native-read boundary, also exercised with fake readers/clocks by flow checks.
+    /// A partial collection keeps classified standard windows, but never uses partial reservations.
+    static func collectEligibility(count: Int, processID: pid_t, focusedIndex: Int?,
+                                   current: () -> Bool, now: () -> TimeInterval,
+                                   budget: EligibilityReadBudget, maximumAppQueries: Int = 512,
+                                   maximumAppDuration: TimeInterval = 0.3,
+                                   read: (Int, EligibilityAttribute) -> Any?,
+                                   visible: () -> [VisibleWindowEvidence]) -> EligibilityCollection {
+        let limit = min(count, 512)
+        var candidates = Array(repeating: WindowEligibilityCandidate(role: nil, subrole: nil), count: limit)
+        var appQueries = 0, appDuration: TimeInterval = 0
+        var aborted = false
+        func canRead() -> Bool {
+            !aborted && current() && budget.available && appQueries < maximumAppQueries && appDuration < maximumAppDuration
+        }
+        func record(_ start: TimeInterval) {
+            let duration = max(0, now() - start)
+            budget.record(duration: duration); appQueries += 1; appDuration += duration
+            if !current() || !budget.available || appQueries >= maximumAppQueries || appDuration >= maximumAppDuration { aborted = true }
+        }
+        func query(_ index: Int, _ attribute: EligibilityAttribute) -> Any? {
+            guard canRead() else { aborted = true; return nil }
+            let start = now(), value = read(index, attribute)
+            record(start); return value
+        }
+        var order = Array(0..<limit)
+        if let focusedIndex, order.contains(focusedIndex) { order.removeAll { $0 == focusedIndex }; order.insert(focusedIndex, at: 0) }
+        for index in order {
+            guard canRead() else { aborted = true; break }
+            candidates[index].role = query(index, .role) as? String
+            if candidates[index].role == kAXWindowRole { candidates[index].subrole = query(index, .subrole) as? String }
+        }
+        let standard = Set(candidates.indices.filter { WindowEligibility.isEligible(role: candidates[$0].role, subrole: candidates[$0].subrole) })
+        guard !aborted, count <= limit else { return .init(indices: standard, incomplete: true) }
+        guard candidates.contains(where: { $0.role == kAXWindowRole && $0.subrole != kAXStandardWindowSubrole }) else {
+            return .init(indices: standard, incomplete: false)
+        }
+        for index in order where candidates[index].role == kAXWindowRole {
+            if standard.contains(index) {
+                candidates[index].isMinimized = query(index, .minimized) as? Bool ?? false
+                if candidates[index].isMinimized { continue }
+            }
+            let position = query(index, .position) as? CGPoint
+            let size = query(index, .size) as? CGSize
+            if let position, let size { candidates[index].frame = CGRect(origin: position, size: size) }
+            candidates[index].title = query(index, .title) as? String
+            if !standard.contains(index) {
+                candidates[index].isMain = query(index, .main) as? Bool ?? false
+                candidates[index].isFocused = index == focusedIndex
+            }
+            if aborted { break }
+        }
+        guard canRead() else { return .init(indices: standard, incomplete: true) }
+        let start = now(), evidence = visible()
+        record(start)
+        guard !aborted else { return .init(indices: standard, incomplete: true) }
+        return .init(indices: WindowEligibility.eligibleIndices(candidates, processID: processID, visible: evidence), incomplete: false)
+    }
+
+    private func eligibilityAttribute(_ element: AXUIElement, _ kind: EligibilityAttribute) -> Any? {
+        switch kind {
+        case .role: return attribute(element, kAXRoleAttribute) as String?
+        case .subrole: return attribute(element, kAXSubroleAttribute) as String?
+        case .title: return attribute(element, kAXTitleAttribute) as String?
+        case .main: return attribute(element, kAXMainAttribute) as Bool?
+        case .minimized: return attribute(element, kAXMinimizedAttribute) as Bool?
+        case .position, .size:
+            let name = kind == .position ? kAXPositionAttribute : kAXSizeAttribute
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success,
+                  let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+            let axValue = value as! AXValue
+            if kind == .position {
+                var point = CGPoint.zero
+                guard AXValueGetType(axValue) == .cgPoint, AXValueGetValue(axValue, .cgPoint, &point) else { return nil }
+                return point
+            }
+            var size = CGSize.zero
+            guard AXValueGetType(axValue) == .cgSize, AXValueGetValue(axValue, .cgSize, &size) else { return nil }
+            return size
+        }
+    }
+
+    private func eligibleElements(_ elements: [AXUIElement], processID: pid_t, focused: AXUIElement?,
+                                  current: () -> Bool, budget: EligibilityReadBudget,
+                                  visible: () -> [VisibleWindowEvidence]) -> (elements: [AXUIElement], incomplete: Bool) {
+        let focusedIndex = focused.flatMap { focus in elements.firstIndex { CFEqual(focus, $0) } }
+        let result = Self.collectEligibility(count: elements.count, processID: processID, focusedIndex: focusedIndex,
+            current: current, now: { ProcessInfo.processInfo.systemUptime }, budget: budget,
+            read: { self.eligibilityAttribute(elements[$0], $1) }, visible: visible)
+        return (elements.indices.filter { result.indices.contains($0) }.map { elements[$0] }, result.incomplete)
+    }
+
+    private func isEligible(_ element: AXUIElement, processID: pid_t, current: () -> Bool, budget: EligibilityReadBudget) -> Bool {
+        func query<T>(_ target: AXUIElement, _ name: String) -> T? {
+            guard current(), budget.available else { return nil }
+            let start = ProcessInfo.processInfo.systemUptime
+            let value: T? = attribute(target, name)
+            budget.record(duration: ProcessInfo.processInfo.systemUptime - start)
+            return current() ? value : nil
+        }
+        guard let role: String = query(element, kAXRoleAttribute), role == kAXWindowRole else { return false }
+        let subrole: String? = query(element, kAXSubroleAttribute)
+        if WindowEligibility.isEligible(role: role, subrole: subrole) { return current() }
+        guard current(), budget.available else { return false }
+        let application = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(application, 0.12)
+        guard let elements: [AXUIElement] = query(application, kAXWindowsAttribute) else { return false }
+        let focused: AXUIElement? = query(application, kAXFocusedWindowAttribute)
+        guard current(), budget.available else { return false }
+        let unique = Self.deduplicatedElements(elements)
+        for window in unique.prefix(512) { AXUIElementSetMessagingTimeout(window, 0.12) }
+        return eligibleElements(unique, processID: processID, focused: focused, current: current, budget: budget,
+                                visible: Self.visibleWindowEvidence).elements.contains { CFEqual($0, element) }
     }
 
     private func frame(_ element: AXUIElement) -> CGRect? {

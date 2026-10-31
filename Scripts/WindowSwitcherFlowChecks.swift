@@ -1,6 +1,7 @@
 // OS boundaries only: the monitor, chooser selection, stack keyboard driver and
 // activation coordinator below are the same types used by the shipping app.
 import AppKit
+import CoreGraphics
 import HandyToolbeltCore
 
 private final class NoCapture: WindowPreviewCapturing {
@@ -336,6 +337,124 @@ private final class SnapListener: WindowSnappingMonitoring {
         check(retained.map(\.handle) == ["known"], "Production failure policy retains known live handles, drops destroyed and terminated handles, and invents no cold handles")
         check(WindowCatalog.retainedDuringEnumerationFailure(knownHandles, unavailablePIDs: [], livePIDs: [10], processID: { $0.pid }, destroyed: { _ in false }).isEmpty,
               "Successful empty enumeration clears previously retained handles")
+        let metadataRow: [String: Any] = [kCGWindowOwnerPID as String: 20,
+            kCGWindowLayer as String: 0, kCGWindowAlpha as String: 1.0,
+            kCGWindowBounds as String: frame.dictionaryRepresentation]
+        check(WindowCatalog.visibleWindowEvidence(rows: [metadataRow]).count == 1,
+              "Production metadata adapter accepts an opaque layer-zero window")
+        for layer in [3, 8] {
+            var floating = metadataRow; floating[kCGWindowLayer as String] = layer
+            check(WindowCatalog.visibleWindowEvidence(rows: [floating]).count == 1,
+                  "Visible floating and modal layers remain eligible evidence")
+        }
+        for (key, value) in [(kCGWindowLayer as String, -1 as Any), (kCGWindowAlpha as String, 0.0 as Any),
+                             (kCGWindowBounds as String, CGRect.zero.dictionaryRepresentation as Any)] {
+            var invalid = metadataRow; invalid[key] = value
+            check(WindowCatalog.visibleWindowEvidence(rows: [invalid]).isEmpty,
+                  "Production metadata adapter excludes negative layers transparent and invalid windows")
+        }
+        // Exercise the exact production native-read boundary without remote UI reads or real delays.
+        var readEvents: [(Int, WindowCatalog.EligibilityAttribute)] = []
+        var fakeTime: TimeInterval = 0
+        var collectionCurrent = true
+        var cancelAfter: Int?
+        var readDuration: TimeInterval = 0
+        var minimizedStandard = false
+        var standardIndices: Set<Int> = [0, 1]
+        var visibleReads = 0
+        func collect(count: Int, focused: Int? = nil, budget: WindowCatalog.EligibilityReadBudget = .init(), appQueries: Int = 512,
+                     appDuration: TimeInterval = 0.3) -> WindowCatalog.EligibilityCollection {
+            WindowCatalog.collectEligibility(count: count, processID: 20, focusedIndex: focused,
+                current: { collectionCurrent }, now: { fakeTime }, budget: budget,
+                maximumAppQueries: appQueries, maximumAppDuration: appDuration,
+                read: { index, kind in
+                    readEvents.append((index, kind)); fakeTime += readDuration
+                    if readEvents.count == cancelAfter { collectionCurrent = false }
+                    switch kind {
+                    case .role: return "AXWindow"
+                    case .subrole: return standardIndices.contains(index) ? "AXStandardWindow" : "CustomWindow"
+                    case .position: return frame.origin
+                    case .size: return frame.size
+                    case .title: return nil
+                    case .main: return false
+                    case .minimized: return minimizedStandard
+                    }
+                }, visible: { visibleReads += 1; return [.init(processID: 20, frame: frame)] })
+        }
+        let standardOnly = collect(count: 2)
+        check(standardOnly.indices == [0, 1] && !standardOnly.incomplete && readEvents.count == 4 && visibleReads == 0,
+              "Standard-only classification performs only role/subrole reads and no visible enrichment")
+        readEvents = []; cancelAfter = 2
+        let cancelledCollection = collect(count: 2)
+        check(cancelledCollection.indices == [0] && cancelledCollection.incomplete && readEvents.count == 2,
+              "Cancellation stops between native reads and preserves an already classified standard")
+        collectionCurrent = true; cancelAfter = nil; readEvents = []
+        let queryLimited = collect(count: 2, appQueries: 2)
+        check(queryLimited.indices == [0] && queryLimited.incomplete && readEvents.count == 2,
+              "Per-app query cap prevents further native classification reads")
+        readEvents = []; readDuration = 0.16
+        let slowCollection = collect(count: 2)
+        check(slowCollection.indices == [0] && slowCollection.incomplete && readEvents.count == 2,
+              "Injected monotonic clock bounds slow classification without real delays")
+        readEvents = []; readDuration = 0.2
+        let sharedBudget = WindowCatalog.EligibilityReadBudget(maximumQueries: 100, maximumDuration: 0.5)
+        let firstApp = collect(count: 1, budget: sharedBudget, appDuration: 10)
+        let secondApp = collect(count: 1, budget: sharedBudget, appDuration: 10)
+        check(firstApp.indices == [0] && !firstApp.incomplete && secondApp.incomplete && readEvents.count == 3,
+              "Cumulative budget spans applications and stops after at most one in-flight read overshoot")
+        readEvents = []; readDuration = 0; standardIndices = [0]
+        let partialEnrichment = collect(count: 2, appQueries: 6)
+        check(partialEnrichment.indices == [0] && partialEnrichment.incomplete && readEvents.count == 6 && visibleReads == 0,
+              "Abandoned enrichment keeps standards and rejects fallback rather than using partial reservations")
+        readEvents = []; minimizedStandard = true
+        let minimizedCollection = collect(count: 2)
+        check(minimizedCollection.indices == [0, 1] && !minimizedCollection.incomplete,
+              "Production boundary keeps minimized standard plus the distinct real visible custom window")
+        check(!readEvents.contains { $0.0 == 0 && ($0.1 == .position || $0.1 == .size || $0.1 == .title) },
+              "Definitely minimized standards need no visible geometry/title queries")
+        readEvents = []; standardIndices = []; minimizedStandard = false
+        let focusedDiscovery = collect(count: 2, focused: 1)
+        let focusedRevalidation = collect(count: 2, focused: 1)
+        check(focusedDiscovery.indices == [1] && focusedRevalidation.indices == [1],
+              "Focused-only oversubscription disambiguation is identical for discovery and activation")
+        var cappedReads = 0
+        let capped = WindowCatalog.collectEligibility(count: 10_000, processID: 20, focusedIndex: nil,
+            current: { true }, now: { 0 }, budget: .init(maximumQueries: 10_000), maximumAppQueries: 10_000,
+            read: { _, _ in cappedReads += 1; return "AXButton" }, visible: { fatalError("Unexpected oversized enrichment") })
+        check(capped.incomplete && cappedReads == 512, "Candidate cap applies before any unbounded native collection")
+        var nonwindowReads = 0
+        let nonwindow = WindowCatalog.collectEligibility(count: 1, processID: 20, focusedIndex: nil,
+            current: { true }, now: { 0 }, budget: .init(), read: { _, kind in
+                nonwindowReads += 1; check(kind == .role, "Nonwindow nodes never request subrole or enrichment"); return "AXMenu"
+            }, visible: { fatalError("Unexpected nonwindow enrichment") })
+        check(nonwindow.indices.isEmpty && nonwindowReads == 1, "Nonwindow role exits after one native read")
+        var finalAppOrder = WindowCatalog.EligibilityScanOrder(count: 3, startOffset: 0)
+        check(finalAppOrder.indices == [0, 1, 2], "Initial bounded scan follows the normal app order")
+        finalAppOrder.exhausted(at: 2) // The final app partially classifies before its shared budget expires.
+        let resumedOrder = WindowCatalog.EligibilityScanOrder(count: 3, startOffset: finalAppOrder.nextStartOffset)
+        check(resumedOrder.indices == [2, 0, 1], "Final-app budget exhaustion gives that incomplete app first turn next scan")
+        let rotatedRows = resumedOrder.indices.map { (pid: pid_t($0 + 10), handle: "classified-\($0)") }
+        let catalogueRows = WindowCatalog.catalogueOrder(rotatedRows, appOrder: [10: 0, 11: 1, 12: 2], processID: { $0.pid })
+        check(catalogueRows.map(\.handle) == ["classified-0", "classified-1", "classified-2"],
+              "Fairness rotation preserves all classified standards and stable alphabetical output order")
+        // Production discovery and activation use the same public-metadata association policy.
+        let standardCandidate = WindowEligibilityCandidate(role: "AXWindow", subrole: "AXStandardWindow", frame: frame)
+        let visibleCandidate = WindowEligibilityCandidate(role: "AXWindow", subrole: "CustomWindow", frame: frame)
+        let visibleEvidence = [VisibleWindowEvidence(processID: 20, frame: frame)]
+        check(WindowEligibility.eligibleIndices([visibleCandidate], processID: 20, visible: visibleEvidence) == [0],
+              "Visible custom window qualifies without main or writable AX evidence")
+        check(WindowEligibility.eligibleIndices([visibleCandidate], processID: 20, visible: []).isEmpty,
+              "Activation revalidation rejects a nonstandard window after visible evidence disappears")
+        check(WindowEligibility.eligibleIndices([visibleCandidate, standardCandidate], processID: 20, visible: visibleEvidence) == [1],
+              "Standard window reserves visible evidence before phantom nodes can borrow it")
+        check(WindowEligibility.eligibleIndices([visibleCandidate, visibleCandidate], processID: 20, visible: visibleEvidence).isEmpty,
+              "Ambiguous duplicate AX nodes cannot produce duplicate switcher entries")
+        check(WindowEligibility.eligibleIndices([visibleCandidate, visibleCandidate], processID: 20, visible: visibleEvidence + visibleEvidence) == [0, 1],
+              "Two real overlapping visible windows retain two switcher entries")
+        check(WindowEligibility.eligibleIndices([standardCandidate, visibleCandidate], processID: 20, visible: visibleEvidence + visibleEvidence) == [0, 1],
+              "One standard reservation leaves a second visible window available to a custom AX window")
+        check(WindowEligibility.eligibleIndices([standardCandidate], processID: 20, visible: []) == [0],
+              "Ordinary minimized hidden and other-Space windows retain eligibility")
         // Exercise the real catalogue queues without AX reads or user-visible effects.
         let heldScan = DispatchQueue(label: "checks.held-scan"), releaseScan = DispatchSemaphore(value: 0)
         heldScan.async { releaseScan.wait() }

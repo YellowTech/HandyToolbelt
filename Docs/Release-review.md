@@ -1,5 +1,29 @@
 # HandyToolbelt release review
 
+## Visible-window review corrections — 0.30.10 (78), 2026-10-31
+
+A fresh independent review found two gaps: native Accessibility collection was not bounded before matching limits applied, and a minimized standard window could consume the visible evidence for a custom window at the same bounds. The review also noted that PID/geometry association is heuristic and synthetic tests do not establish native provider latency or universal AX support.
+
+New eligibility reads now check cancellation and query/time budgets before and after each IPC. Partial collections retain classified standard windows and prior live handles without duplicates; rotating the next scan avoids starving later apps when the shared budget expires. The second review caught final-app exhaustion missing that rotation, which is also corrected. Fresh focus evidence wins over prior focus on incomplete scans. Definitely minimized standard windows stay eligible but cannot reserve visible evidence.
+
+The standard activation path retains its two eligibility queries. Budgets cover the new eligibility work, not all enumeration/metadata/observer work, and cannot interrupt an IPC already in flight. Very large or consistently slow providers can still yield incomplete custom-window discovery; ambiguous identity remains a conservative rejection case.
+
+The independent reviewer rechecked the fixes and found no additional must-fix regression in that static pass. Six focused tests, the full unit suite and 96 switcher flow checks passed. New tests exercise query/time caps, cancellation, partial collection, minimized evidence, focused-only revalidation, final-app fairness and stable display ordering.
+
+Release compilation and strict signing checks passed. Installed and restarted 0.30.10 with matching executables, preserved settings/signing requirement, one running process and a responsive Switcher page. Rollback: `.build/install-backups/2026-10-31T19-09-16Z`.
+
+The user confirmed that Unity windows now appear in the switcher.
+
+## Visible window eligibility — 0.30.9 (77), 2026-10-31
+
+Window eligibility is independent of application identity. Nonstandard Accessibility windows can qualify by matching real visible WindowServer windows, without requiring a standard subrole or writable main status. Matching uses public window metadata, not screenshots. Ordinary window handling retains support for minimized/hidden windows and other Spaces.
+
+Visible floating/modal windows and accessory-app windows can qualify too. Association allows small coordinate rounding differences and accounts for multiple native windows at identical bounds; duplicate AX aliases cannot all borrow a single native window. Standard windows retain the fast path, while extra metadata is loaded once per background scan when needed. Activation revalidates the same policy using fresh visibility evidence.
+
+The full unit suite, five focused eligibility tests and 81 switcher flow checks passed. Regression cases cover balanced stacked windows, ambiguous duplicate AX nodes, fractional geometry, floating/modal layers, invalid/transparent surfaces and nonwindow roles. AX messaging timeouts are applied before all new classification reads. Native UI inspection remained unavailable for Unity, so actual chooser/focus behavior still needs user verification.
+
+Release compilation and strict signing checks passed. Installed and restarted 0.30.9 with matching executables, preserved settings/signing requirement, one running process and a responsive Switcher page. Rollback: `.build/install-backups/2026-10-31T16-57-27Z`.
+
 ## Fast snapping with paced fallback — 0.30.7 (75), 2026-10-29
 
 Reviewed [Rectangle's frame-adjustment handling](https://github.com/rxhanson/Rectangle/blob/main/Rectangle/AccessibilityElement.swift) and [Enhanced UI notes](https://github.com/rxhanson/Rectangle/blob/main/TerminalCommands.md#control-enhanced-ui-handling). HandyToolbelt independently implements a scoped fast attempt: inspect the target app's `AXEnhancedUserInterface`, temporarily disable it when needed, change the frame, and restore and verify the original mode immediately afterward. Unknown or unconfirmed mode changes use the paced path. VoiceOver and Switch Control keep paced handling; no permanent per-app accessibility policy is introduced.

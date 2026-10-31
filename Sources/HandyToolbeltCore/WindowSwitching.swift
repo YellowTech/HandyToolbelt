@@ -87,21 +87,106 @@ public struct WindowItem: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Eligibility describes switchable application windows, independently of Space or visibility.
+/// Public WindowServer metadata; no capture permission or private window identity is needed.
+public struct VisibleWindowEvidence: Equatable, Sendable {
+    public var processID: Int32
+    public var frame: CGRect
+    public var title: String?
+    public init(processID: Int32, frame: CGRect, title: String? = nil) {
+        self.processID = processID; self.frame = frame; self.title = title
+    }
+}
+
+public struct WindowEligibilityCandidate: Equatable, Sendable {
+    public var role: String?
+    public var subrole: String?
+    public var frame: CGRect?
+    public var title: String?
+    public var isMain: Bool
+    public var isFocused: Bool
+    public var isMinimized: Bool
+    public init(role: String?, subrole: String?, frame: CGRect? = nil, title: String? = nil, isMain: Bool = false, isFocused: Bool = false, isMinimized: Bool = false) {
+        self.role = role; self.subrole = subrole; self.frame = frame; self.title = title
+        self.isMain = isMain; self.isFocused = isFocused; self.isMinimized = isMinimized
+    }
+}
+
 public enum WindowEligibility {
-    public static func isEligible(role: String?, subrole: String?, isMain: Bool? = nil, mainIsSettable: Bool? = nil) -> Bool {
-        guard role == "AXWindow" else { return false }
-        switch subrole {
-        case "AXStandardWindow":
-            // AXMain describes current status, and read-only/unsupported AX does not disqualify a real window.
-            return true
-        case "AXDialog":
-            // Keep independently addressable dialogs with positive main evidence. Writability is only
-            // a conservative fallback; it is not the same contract as NSWindow.canBecomeMain.
-            return isMain == true || mainIsSettable == true
-        default:
-            return false
+    /// Standard windows remain switchable when hidden, minimized, or on another Space.
+    public static func isEligible(role: String?, subrole: String?) -> Bool {
+        role == "AXWindow" && subrole == "AXStandardWindow"
+    }
+    public static func validFrame(_ frame: CGRect) -> Bool {
+        frame.origin.x.isFinite && frame.origin.y.isFinite && frame.size.width.isFinite && frame.size.height.isFinite &&
+            frame.size.width > 0 && frame.size.height > 0
+    }
+    /// Assign visible evidence once. Standard AX windows reserve one match each first, preventing
+    /// an auxiliary AX node from borrowing a real window's geometry. Oversubscribed ambiguity fails closed.
+    public static func eligibleIndices(_ candidates: [WindowEligibilityCandidate], processID: Int32,
+                                       visible: [VisibleWindowEvidence]) -> Set<Int> {
+        let evidence = visible.filter { $0.processID == processID && validFrame($0.frame) }
+        var eligible = Set(candidates.indices.filter { isEligible(role: candidates[$0].role, subrole: candidates[$0].subrole) })
+        guard candidates.count <= 512, evidence.count <= 512 else { return eligible }
+        func sameGeometry(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.origin.x - b.origin.x) < 2 && abs(a.origin.y - b.origin.y) < 2 &&
+                abs(a.size.width - b.size.width) < 2 && abs(a.size.height - b.size.height) < 2
         }
+        func matches(_ candidate: WindowEligibilityCandidate) -> [Int] {
+            guard let frame = candidate.frame, validFrame(frame) else { return [] }
+            let geometry = evidence.indices.filter { sameGeometry(evidence[$0].frame, frame) }
+            if let title = candidate.title, !title.isEmpty {
+                let titled = geometry.filter { evidence[$0].title == title }
+                if !titled.isEmpty { return titled }
+            }
+            return geometry
+        }
+        let edges = candidates.map(matches)
+        // A bounded augmenting-path matcher consumes only one visible window per AX node.
+        func assignment(_ indices: [Int], excluding: Set<Int>) -> [Int: Int] {
+            var owners: [Int: Int] = [:]
+            func visit(_ candidate: Int, seen: inout Set<Int>) -> Bool {
+                for window in edges[candidate] where !excluding.contains(window) && seen.insert(window).inserted {
+                    if let owner = owners[window] {
+                        if visit(owner, seen: &seen) { owners[window] = candidate; return true }
+                    } else { owners[window] = candidate; return true }
+                }
+                return false
+            }
+            for candidate in indices { var seen = Set<Int>(); _ = visit(candidate, seen: &seen) }
+            return owners
+        }
+        let reserved = Set(assignment(eligible.sorted().filter { !candidates[$0].isMinimized }, excluding: []).keys)
+        var pending = Set(candidates.indices.filter { !eligible.contains($0) && candidates[$0].role == "AXWindow" && !edges[$0].allSatisfy(reserved.contains) })
+        while let seed = pending.min() {
+            var peers: Set<Int> = [seed]
+            var windows = Set(edges[seed].filter { !reserved.contains($0) })
+            var changed = true
+            while changed {
+                changed = false
+                for candidate in pending.sorted() where !peers.contains(candidate) {
+                    let available = Set(edges[candidate]).subtracting(reserved)
+                    if !available.isDisjoint(with: windows) {
+                        peers.insert(candidate); windows.formUnion(available); changed = true
+                    }
+                }
+            }
+            pending.subtract(peers)
+            // Path depth and ambiguity work stay bounded even for pathological AX providers.
+            guard peers.count <= 256, windows.count <= 256 else { continue }
+            let ordered = peers.sorted()
+            if peers.count <= windows.count {
+                let owners = assignment(ordered, excluding: reserved)
+                if owners.count == peers.count { eligible.formUnion(owners.values) }
+                continue
+            }
+            // Oversubscribed AX nodes may include phantoms. Positive focus/main status only
+            // disambiguates here; ordinary visible windows never require either attribute.
+            let focused = ordered.filter { candidates[$0].isFocused }
+            let main = ordered.filter { candidates[$0].isMain }
+            if focused.count == 1 { eligible.insert(focused[0]) }
+            else if main.count == 1 { eligible.insert(main[0]) }
+        }
+        return eligible
     }
 }
 

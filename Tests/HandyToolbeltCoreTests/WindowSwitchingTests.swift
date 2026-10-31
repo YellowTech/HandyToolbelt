@@ -232,40 +232,75 @@ private func sampleWindows() -> [WindowItem] {
     #expect(!session.accepts(second))
 }
 
-@Test func ordinaryWindowEligibilityDoesNotRequireMainStatusOrWritableAX() {
-    for isMain: Bool? in [nil, false, true] {
-        for settable: Bool? in [nil, false, true] {
-            #expect(WindowEligibility.isEligible(role: "AXWindow", subrole: "AXStandardWindow", isMain: isMain, mainIsSettable: settable))
-        }
-    }
-    #expect(!WindowEligibility.isEligible(role: nil, subrole: "AXStandardWindow"))
+@Test func standardWindowsRemainEligibleWithoutVisibility() {
+    let candidates = [WindowEligibilityCandidate(role: "AXWindow", subrole: "AXStandardWindow")]
+    #expect(WindowEligibility.eligibleIndices(candidates, processID: 1, visible: []) == [0])
     #expect(!WindowEligibility.isEligible(role: "AXSheet", subrole: "AXStandardWindow"))
 }
 
-@Test func auxiliaryWindowRolesAreExcludedEvenWithMainEvidence() {
-    for subrole: String? in [nil, "AXUnknown", "AXFloatingWindow", "AXSystemFloatingWindow", "AXSystemDialog", "AXDecorative", "CustomOverlay"] {
-        #expect(!WindowEligibility.isEligible(role: "AXWindow", subrole: subrole, isMain: true, mainIsSettable: true))
-    }
-}
-
-@Test func independentDialogsRequirePositiveMainEvidence() {
-    #expect(WindowEligibility.isEligible(role: "AXWindow", subrole: "AXDialog", isMain: true))
-    #expect(WindowEligibility.isEligible(role: "AXWindow", subrole: "AXDialog", isMain: false, mainIsSettable: true))
-    for isMain: Bool? in [nil, false] {
-        for settable: Bool? in [nil, false] {
-            #expect(!WindowEligibility.isEligible(role: "AXWindow", subrole: "AXDialog", isMain: isMain, mainIsSettable: settable))
+@Test func visibleNonstandardWindowsUseAppAgnosticEvidence() {
+    let frame = CGRect(x: -1200, y: 80, width: 1100, height: 800)
+    for subrole: String? in [nil, "AXUnknown", "AXDialog", "AXFloatingWindow", "CustomWindow"] {
+        let candidate = WindowEligibilityCandidate(role: "AXWindow", subrole: subrole, frame: frame)
+        for pid: Int32 in [1, 2] {
+            #expect(WindowEligibility.eligibleIndices([candidate], processID: pid, visible: [.init(processID: pid, frame: frame)]) == [0])
+            #expect(WindowEligibility.eligibleIndices([candidate], processID: pid, visible: [.init(processID: pid + 1, frame: frame)]).isEmpty)
+            #expect(WindowEligibility.eligibleIndices([candidate], processID: pid, visible: []).isEmpty)
         }
     }
+    for role: String? in [nil, "AXSheet", "AXMenu", "AXToolTip", "AXHelpTag", "AXPopover"] {
+        let candidate = WindowEligibilityCandidate(role: role, subrole: "AXUnknown", frame: frame)
+        #expect(WindowEligibility.eligibleIndices([candidate], processID: 1, visible: [.init(processID: 1, frame: frame)]).isEmpty)
+    }
 }
 
-@Test func ordinaryEligibilityKeepsMinimizedHiddenAndUnpreviewableWindows() {
-    let windows = [
-        WindowItem(processID: 1, appName: "App", bundleIdentifier: "app", title: "Minimized", isMinimized: true),
-        WindowItem(processID: 1, appName: "App", bundleIdentifier: "app", title: "Hidden", isHidden: true),
-        WindowItem(processID: 1, appName: "App", bundleIdentifier: "app", title: "Other Space", frame: nil)
-    ]
-    #expect(WindowEligibility.isEligible(role: "AXWindow", subrole: "AXStandardWindow", isMain: false, mainIsSettable: false))
-    #expect(WindowOrdering.candidates(windows, settings: WindowSwitcherSettings(), currentProcessID: 1) == windows)
+@Test func visibleWindowAssociationRejectsGhostsAndAmbiguity() {
+    let frame = CGRect(x: 10, y: 20, width: 500, height: 400)
+    let standard = WindowEligibilityCandidate(role: "AXWindow", subrole: "AXStandardWindow", frame: frame, title: "Document")
+    let ghost = WindowEligibilityCandidate(role: "AXWindow", subrole: "AXUnknown", frame: frame, title: "Document")
+    let visible = [VisibleWindowEvidence(processID: 1, frame: frame)]
+    #expect(WindowEligibility.eligibleIndices([ghost, standard], processID: 1, visible: visible) == [1])
+    #expect(WindowEligibility.eligibleIndices([ghost, ghost], processID: 1, visible: visible).isEmpty)
+    var focused = ghost; focused.isFocused = true
+    #expect(WindowEligibility.eligibleIndices([ghost, focused], processID: 1, visible: visible) == [1])
+    var main = ghost; main.isMain = true
+    #expect(WindowEligibility.eligibleIndices([main, ghost], processID: 1, visible: visible) == [0])
+    #expect(WindowEligibility.eligibleIndices([main, main], processID: 1, visible: visible).isEmpty)
+    #expect(WindowEligibility.eligibleIndices([ghost], processID: 1, visible: visible + visible) == [0])
+    #expect(WindowEligibility.eligibleIndices([ghost, ghost], processID: 1, visible: visible + visible) == [0, 1])
+    #expect(WindowEligibility.eligibleIndices([standard, ghost], processID: 1, visible: visible + visible) == [0, 1])
+    var titled = ghost; titled.title = "Second"
+    let titledVisible = [VisibleWindowEvidence(processID: 1, frame: frame, title: "First"), .init(processID: 1, frame: frame, title: "Second")]
+    #expect(WindowEligibility.eligibleIndices([titled], processID: 1, visible: titledVisible) == [0])
+}
+
+@Test func minimizedStandardWindowsDoNotReserveVisibleEvidence() {
+    let frame = CGRect(x: 10, y: 20, width: 500, height: 400)
+    let minimized = WindowEligibilityCandidate(role: "AXWindow", subrole: "AXStandardWindow", frame: frame, isMinimized: true)
+    let visible = WindowEligibilityCandidate(role: "AXWindow", subrole: "AXUnknown", frame: frame)
+    let evidence = [VisibleWindowEvidence(processID: 1, frame: frame)]
+    #expect(WindowEligibility.eligibleIndices([minimized, visible], processID: 1, visible: evidence) == [0, 1])
+    var ordinary = minimized; ordinary.isMinimized = false
+    #expect(WindowEligibility.eligibleIndices([ordinary, visible], processID: 1, visible: evidence) == [0])
+}
+
+@Test func visibleWindowMatchingToleratesFractionalCoordinatesAndBoundsLargeGroups() {
+    let frame = CGRect(x: 10.5, y: 20.5, width: 926.5, height: 400.5)
+    let candidate = WindowEligibilityCandidate(role: "AXWindow", subrole: nil, frame: frame)
+    let visible = VisibleWindowEvidence(processID: 1, frame: CGRect(x: 10, y: 20, width: 926, height: 400))
+    #expect(WindowEligibility.eligibleIndices([candidate], processID: 1, visible: [visible]) == [0])
+    #expect(WindowEligibility.eligibleIndices(Array(repeating: candidate, count: 513), processID: 1, visible: [visible]).isEmpty)
+}
+
+@Test func nonstandardWindowsRequireValidMatchingGeometry() {
+    let frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+    for invalid: CGRect? in [nil, .zero, CGRect(x: 0, y: 0, width: -1, height: 100), CGRect(x: CGFloat.infinity, y: 0, width: 100, height: 100), CGRect(x: 0, y: 0, width: 100, height: CGFloat.infinity)] {
+        let candidate = WindowEligibilityCandidate(role: "AXWindow", subrole: nil, frame: invalid)
+        #expect(WindowEligibility.eligibleIndices([candidate], processID: 1, visible: [.init(processID: 1, frame: frame)]).isEmpty)
+        if let invalid { #expect(!WindowEligibility.validFrame(invalid)) }
+    }
+    let candidate = WindowEligibilityCandidate(role: "AXWindow", subrole: nil, frame: frame.offsetBy(dx: 2, dy: 0))
+    #expect(WindowEligibility.eligibleIndices([candidate], processID: 1, visible: [.init(processID: 1, frame: frame)]).isEmpty)
 }
 
 @Test func versionFourDefaultsAndLegacyEnablementMigration() throws {
