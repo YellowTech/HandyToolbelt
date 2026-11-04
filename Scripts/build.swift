@@ -22,7 +22,8 @@ struct SigningSelection {
     let persist: Bool
 }
 func selectSigningIdentity(override: String?, pin: String?, pinExists: Bool, hasExistingApp: Bool,
-                           available: () throws -> String) throws -> SigningSelection {
+                           available: () throws -> String,
+                           local: () throws -> String) throws -> SigningSelection {
     if let override, !override.isEmpty {
         // Preserve existing pins for disposable ad-hoc overrides; pin fresh ones for rebuilds.
         return SigningSelection(identity: override, persist: override != "-" || !pinExists)
@@ -32,7 +33,11 @@ func selectSigningIdentity(override: String?, pin: String?, pinExists: Bool, has
         guard !identity.isEmpty else {
             throw BuildFailure("The local signing identity is empty. Set HANDYTOOLBELT_SIGN_IDENTITY explicitly.")
         }
-        return SigningSelection(identity: identity, persist: false)
+        if identity != "-" { return SigningSelection(identity: identity, persist: false) }
+        return SigningSelection(identity: try local(), persist: true)
+    }
+    guard !hasExistingApp else {
+        throw BuildFailure("A repository app already exists without a signing pin. Set HANDYTOOLBELT_SIGN_IDENTITY explicitly to preserve or change its signer.")
     }
     let output = try available()
     let regex = try NSRegularExpression(pattern: #"\b([A-Fa-f0-9]{40})\s+"(?:Apple Development|Mac Developer):[^"]+""#)
@@ -45,10 +50,7 @@ func selectSigningIdentity(override: String?, pin: String?, pinExists: Bool, has
     guard identities.isEmpty else {
         throw BuildFailure("Found \(identities.count) development identities. Choose one with HANDYTOOLBELT_SIGN_IDENTITY='YOUR_SIGNING_IDENTITY' swift Scripts/build.swift.")
     }
-    guard !hasExistingApp else {
-        throw BuildFailure("No development signing identity found and a repository app already exists. Set HANDYTOOLBELT_SIGN_IDENTITY to its signing identity, or explicitly use '-' for an ad-hoc build that may require granting macOS permissions again.")
-    }
-    return SigningSelection(identity: "-", persist: true)
+    return SigningSelection(identity: try local(), persist: true)
 }
 // END SIGNING POLICY
 
@@ -74,16 +76,72 @@ func build() throws {
             throw BuildFailure("Quit HandyToolbelt (including any older repository copy) from its menu bar before building. Replacing a running app can leave macOS checking the old code signature.")
         }
     }
-    func capture(_ executable: String, _ arguments: [String]) throws -> String {
+    try requireStoppedApp()
+    func capture(_ executable: String, _ arguments: [String], environment: [String: String]? = nil) throws -> String {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: executable); task.arguments = arguments
+        task.environment = environment
         let output = Pipe(); task.standardOutput = output
         try task.run()
         let data = output.fileHandleForReading.readDataToEndOfFile(); task.waitUntilExit()
-        guard task.terminationStatus == 0 else { throw BuildFailure("Could not inspect available signing identities.") }
+        guard task.terminationStatus == 0 else {
+            throw BuildFailure("\(URL(fileURLWithPath: executable).lastPathComponent) failed (exit \(task.terminationStatus)). See the command output above.")
+        }
         return String(decoding: data, as: UTF8.self)
     }
-    // Keep the chosen identity stable across builds, including automatic ad-hoc signing.
+    func localSigningIdentity() throws -> String {
+        let security = "/usr/bin/security"
+        let openssl = "/usr/bin/openssl"
+        let name = "HandyToolbelt Local Development"
+        do {
+            let output = try capture(security, ["login-keychain"]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard output.hasPrefix("\"/"), output.hasSuffix("\"") else {
+                throw BuildFailure("Could not locate the login Keychain.")
+            }
+            let keychain = String(output.dropFirst().dropLast())
+            // Untrusted self-signed certificates are listed only without -v.
+            let candidates = try capture(security, ["find-identity", "-p", "codesigning", keychain])
+            let pattern = #"^\s*\d+\) ([A-Fa-f0-9]{40}) "\#(name)"(?: |$)"#
+            let matches = candidates.split(separator: "\n").compactMap { line -> String? in
+                guard line.range(of: pattern, options: .regularExpression) != nil else { return nil }
+                return line.split(whereSeparator: \.isWhitespace).dropFirst().first.map(String.init)
+            }
+            let identities = Set(matches)
+            if identities.count == 1, let identity = identities.first { return identity }
+            guard identities.isEmpty else {
+                throw BuildFailure("Multiple \(name) identities exist. Select one by fingerprint using HANDYTOOLBELT_SIGN_IDENTITY.")
+            }
+
+            let temporary = fm.temporaryDirectory.appendingPathComponent("handytoolbelt-signing-\(UUID())")
+            try fm.createDirectory(at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            defer { try? fm.removeItem(at: temporary) }
+            let key = temporary.appendingPathComponent("key.pem").path
+            let certificate = temporary.appendingPathComponent("certificate.pem").path
+            let identity = temporary.appendingPathComponent("identity.p12").path
+            let password = UUID().uuidString
+            var environment = ProcessInfo.processInfo.environment
+            environment["HANDYTOOLBELT_TEMP_KEY_PASSWORD"] = password
+            let pass = "env:HANDYTOOLBELT_TEMP_KEY_PASSWORD"
+            _ = try capture(openssl, ["req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "7300",
+                "-keyout", key, "-out", certificate, "-passout", pass, "-subj", "/CN=\(name)",
+                "-addext", "extendedKeyUsage=codeSigning", "-addext", "keyUsage=critical,digitalSignature"],
+                environment: environment)
+            _ = try capture(openssl, ["pkcs12", "-export", "-inkey", key, "-in", certificate, "-out", identity,
+                "-passin", pass, "-passout", pass], environment: environment)
+            let fingerprint = try capture(openssl, ["x509", "-in", certificate, "-noout", "-fingerprint", "-sha1"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: "=").last?.replacingOccurrences(of: ":", with: "") ?? ""
+            guard fingerprint.range(of: #"^[A-Fa-f0-9]{40}$"#, options: .regularExpression) != nil else {
+                throw BuildFailure("Could not read the local signing certificate fingerprint.")
+            }
+            _ = try capture(security, ["import", identity, "-k", keychain, "-P", password, "-x", "-T", "/usr/bin/codesign"])
+            return fingerprint
+        } catch {
+            throw BuildFailure("Could not prepare local signing. \(error) Unlock the login Keychain or set HANDYTOOLBELT_SIGN_IDENTITY explicitly.")
+        }
+    }
+
+    // Only persist a selected identity after signing and verification succeed.
     let identityFile = root.appendingPathComponent(".local-signing-identity")
     let override = ProcessInfo.processInfo.environment["HANDYTOOLBELT_SIGN_IDENTITY"]
     let pinExists = fm.fileExists(atPath: identityFile.path)
@@ -94,12 +152,26 @@ func build() throws {
         pin: pin,
         pinExists: pinExists,
         hasExistingApp: fm.fileExists(atPath: bundle.path),
-        available: { try capture("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"]) })
+        available: { try capture("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"]) },
+        local: localSigningIdentity)
     let identity = selection.identity
     if identity == "-" {
         FileHandle.standardError.write(Data("Warning: ad-hoc signing; macOS privacy permissions may need to be granted again after rebuilding.\n".utf8))
     }
-    try requireStoppedApp()
+    if identity != "-" {
+        // Check Keychain access before replacing any part of the existing app.
+        let temporary = fm.temporaryDirectory.appendingPathComponent("handytoolbelt-signing-check-\(UUID())")
+        try fm.createDirectory(at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? fm.removeItem(at: temporary) }
+        let probe = temporary.appendingPathComponent("signing-check")
+        try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: probe)
+        do {
+            _ = try capture("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", probe.path])
+            _ = try capture("/usr/bin/codesign", ["--verify", "--strict", probe.path])
+        } catch {
+            throw BuildFailure("Could not sign with \(identity). \(error) Check that the signing identity is available and its Keychain is unlocked, or set HANDYTOOLBELT_SIGN_IDENTITY explicitly.")
+        }
+    }
     func run(_ executable: String, _ arguments: [String]) throws {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: executable)

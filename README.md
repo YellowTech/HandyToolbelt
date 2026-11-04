@@ -24,7 +24,7 @@ swift Scripts/build.swift
 open dist/HandyToolbelt.app
 ```
 
-No developer account is required for local builds. Fresh checkouts without a development certificate use ad-hoc signing; macOS permissions may need to be granted again after rebuilding. See the [build notes](Docs/Development.md).
+No developer account is required for local builds. Fresh checkouts without an Apple development certificate use a reusable local signing identity from the login Keychain. See the [build notes](Docs/Development.md).
 
 The build does not run tests. Run the test suite and other checks separately:
 

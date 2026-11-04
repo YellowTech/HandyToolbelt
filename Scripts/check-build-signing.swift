@@ -20,26 +20,36 @@ if CommandLine.arguments.count > 1 {
     exit(reportBuildFailure(error))
 }
 let hash = String(repeating: "A", count: 40)
+let localHash = String(repeating: "C", count: 40)
 let one = "  1) \(hash) \"Apple Development: Fixture (TEAM)\"\n"
 let two = one + "  2) \(String(repeating: "B", count: 40)) \"Mac Developer: Other (TEAM)\"\n"
 func select(_ override: String? = nil, _ pin: String? = nil, _ existing: Bool = false,
             _ output: String = "0 valid identities found") throws -> SigningSelection {
-    try selectSigningIdentity(override: override, pin: pin, pinExists: pin != nil, hasExistingApp: existing, available: { output })
+    try selectSigningIdentity(override: override, pin: pin, pinExists: pin != nil, hasExistingApp: existing, available: { output }, local: { localHash })
 }
 func rejects(_ body: () throws -> SigningSelection, containing text: String) {
     do { _ = try body(); fatalError("Expected rejection") }
     catch { expect(String(describing: error).contains(text), "Wrong rejection: \(error)") }
 }
 let fresh = try select()
-expect(fresh.identity == "-" && fresh.persist, "Fresh checkout must pin ad-hoc after success")
+expect(fresh.identity == localHash && fresh.persist, "Fresh checkout without a development identity must pin a local identity after success")
+let migration = try select(nil, " -\n", true, two)
+expect(migration.identity == localHash && migration.persist, "Ad-hoc pins must migrate to the local identity")
+rejects({
+    try selectSigningIdentity(override: nil, pin: "-", pinExists: true, hasExistingApp: true,
+        available: { fatalError("Ad-hoc migration must skip Apple identity discovery") },
+        local: { throw BuildFailure("fixture Keychain failure") })
+}, containing: "fixture Keychain failure")
 let cert = try select(nil, nil, false, one)
 expect(cert.identity == hash && cert.persist, "Sole development identity must be pinned")
 rejects({ try select(nil, nil, false, two) }, containing: "Found 2")
 rejects({ try select(nil, nil, true) }, containing: "repository app already exists")
+rejects({ try select(nil, nil, true, one) }, containing: "repository app already exists")
 rejects({ try select(nil, " \n") }, containing: "empty")
-for pin in [hash, "-", "missing identity"] {
+for pin in [hash, "missing identity"] {
     let selected = try selectSigningIdentity(override: nil, pin: " \(pin)\n", pinExists: true, hasExistingApp: true,
-                                            available: { fatalError("Must not query identities for a pin") })
+                                            available: { fatalError("Must not query identities for a pin") },
+                                            local: { fatalError("Must not set up a local identity for a stable pin") })
     expect(selected.identity == pin && !selected.persist, "Pins must win without discovery/fallback")
 }
 let disposable = try select("-", hash, true, two)
@@ -47,7 +57,8 @@ expect(disposable.identity == "-" && !disposable.persist, "Disposable override m
 let freshExplicit = try select("-")
 expect(freshExplicit.identity == "-" && freshExplicit.persist, "Fresh explicit ad-hoc builds must pin for rebuilds")
 let unreadablePinOverride = try selectSigningIdentity(override: "-", pin: nil, pinExists: true,
-    hasExistingApp: true, available: { fatalError("Override must skip discovery") })
+    hasExistingApp: true, available: { fatalError("Override must skip discovery") },
+    local: { fatalError("Override must skip local identity setup") })
 expect(!unreadablePinOverride.persist, "Explicit ad-hoc override must preserve even an unreadable pin")
 let explicit = try select("chosen identity", "", true, two)
 expect(explicit.identity == "chosen identity" && explicit.persist, "Explicit certificate must win and pin")
