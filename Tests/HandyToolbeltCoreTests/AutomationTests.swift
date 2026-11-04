@@ -124,19 +124,14 @@ final class AutomationTests: XCTestCase {
             XCTAssertFalse(sessions.update(owned))
         }
     }
-    func testOrdinaryOneFingerGesturesAreRejectedButCornerAndStackChildrenRemainValid() {
+    func testOrdinaryOneFingerGesturesAreRejected() {
         for kind in [GestureKind.tap, .click, .swipeLeft] {
             var config = AppConfiguration()
             config.bindings = [.init(gesture: .init(kind: kind, fingers: 1), action: .init())]
             XCTAssertTrue(config.validation().errors.contains { $0.contains("invalid finger count") })
             config.bindings[0].gesture.fingers = 2
             XCTAssertTrue(config.validation().isValid)
-            config.bindings[0].gesture.fingers = 1
-            config.bindings[0].gesture.corner = .topLeft
-            XCTAssertTrue(config.validation().isValid)
-            config.bindings = []
-            config.stacks = [.init(isEnabled: true, bindings: [.init(gesture: .init(kind: kind, fingers: 1), actions: [.init()])])]
-            XCTAssertTrue(config.validation().isValid)
+
         }
     }
 

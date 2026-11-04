@@ -210,8 +210,12 @@ private struct SnappingSettingsView: View {
                 Text("Snapping is turned off.").foregroundStyle(Theme.secondary)
                 Button("Open Settings") { host.section = .settings }
             } else {
-                Text("Drag to a side for half the screen, a corner for a quarter, or the top to fill. Release to snap; Esc cancels.")
-                    .foregroundStyle(Theme.secondary)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Drag to a side for half the screen, a corner for a quarter, or the top to fill. Release to snap; Esc cancels.")
+                        .foregroundStyle(Theme.secondary)
+                    SnappingIllustration(selected: host.section == .snapping)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
                 HStack {
                     Text(model.status).foregroundStyle(Theme.secondary)
                     if !model.hasAccessibility { Button("Review Access") { host.revealSettings(.accessibility) } }
@@ -312,10 +316,17 @@ private struct GlobalSettingsView: View {
             }
             .onAppear { isVisible = true; host.refreshPermissions(); reveal(proxy) }
             .onChange(of: host.settingsNavigationID) { _, _ in reveal(proxy) }
-            .onDisappear { isVisible = false; highlightTask?.cancel(); highlighted = nil; windows.previewSetup.dismiss() }
+            .onDisappear { isVisible = false; highlightTask?.cancel(); highlighted = nil; host.dismissPermissionSetup() }
         }
-        .sheet(isPresented: Binding(get: { windows.previewSetup.isPresented }, set: { if !$0 { windows.previewSetup.dismiss() } })) {
-            WindowPreviewSetupView(model: windows.previewSetup, openSettings: windows.openPreviewSettings) { windows.previewSetup.dismiss(); host.restart() }
+        .sheet(isPresented: Binding(
+            get: { host.isAccessibilitySetupPresented || windows.previewSetup.isPresented },
+            set: { if !$0 { host.dismissPermissionSetup() } }
+        )) {
+            if host.isAccessibilitySetupPresented {
+                AccessibilitySetupView(host: host, trackpad: trackpad)
+            } else {
+                WindowPreviewSetupView(model: windows.previewSetup, openSettings: windows.openPreviewSettings) { host.dismissPermissionSetup(); host.restart() }
+            }
         }
     }
     private func reveal(_ proxy: ScrollViewProxy) {

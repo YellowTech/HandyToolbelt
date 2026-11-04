@@ -28,12 +28,14 @@ enum Theme {
 
 struct GraphiteButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    var prominent = false
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .foregroundStyle(isEnabled ? Theme.text : Theme.secondary)
-            .background(configuration.isPressed ? Theme.selection : Theme.field, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.separator, lineWidth: 1))
+            .padding(.horizontal, prominent ? 14 : 10).padding(.vertical, prominent ? 8 : 5)
+            .foregroundStyle(isEnabled ? (prominent ? Theme.accent : Theme.text) : Theme.secondary)
+            .background(configuration.isPressed != prominent ? Theme.selection : Theme.field, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(prominent ? Theme.accent : Theme.separator, lineWidth: 1))
             .opacity(isEnabled ? 1 : 0.55)
     }
 }

@@ -51,7 +51,7 @@ struct KeyboardModifiersEditor: View {
             if requirement.mode == .exact && !requirement.modifiers.isEmpty {
                 ModifierKeysEditor(modifiers: $requirement.modifiers)
             }
-            HelpHint("Matches the keys you physically hold. Keys held by stack actions do not change this condition.")
+            HelpHint("Matches the keys you physically hold. Shortcuts sent by HandyToolbelt do not change this condition.")
             Spacer(minLength: 0)
         }
     }

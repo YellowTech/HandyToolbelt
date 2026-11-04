@@ -86,23 +86,13 @@ private let longSpec = GestureSpec(kind: .longTouch, fingers: 2)
     }
 }
 
-@Test func temporalCancelAndCornerRearm() {
+@Test func temporalCancelClearsDeferredTap() {
     var r = GestureRecognizer(); let c = temporalContacts()
     _ = r.process(c, at: 0, eligibleTemporalSpecs: [doubleSpec])
     _ = r.process(c, at: 0.05, eligibleTemporalSpecs: [doubleSpec])
     _ = r.process([], at: 0.1, eligibleTemporalSpecs: [doubleSpec])
     r.cancelTemporalGestures()
     #expect(r.advanceTime(to: 0.4).isEmpty)
-    let owner = Contact(id: 10, x: 0.05, y: 0.95)
-    let spec = GestureSpec(kind: .longTouch, fingers: 2, corner: .topLeft)
-    _ = r.process([owner], at: 0.5, enabledCorners: [.topLeft], eligibleTemporalSpecs: [spec])
-    _ = r.process([owner], at: 0.76, enabledCorners: [.topLeft], eligibleTemporalSpecs: [spec])
-    for start in [0.8, 1.5] {
-        _ = r.process([owner] + c, at: start, enabledCorners: [.topLeft], eligibleTemporalSpecs: [spec])
-        #expect(r.process([owner] + c, at: start + 0.56, enabledCorners: [.topLeft], eligibleTemporalSpecs: [spec]) == [spec])
-        #expect(r.beginPhysicalPress(at: start + 0.57, allowSingleFinger: false) == nil)
-        #expect(r.process([owner], at: start + 0.6, enabledCorners: [.topLeft], eligibleTemporalSpecs: [spec]).isEmpty)
-    }
 }
 
 @Test func temporalTuningLegacyDefaultsAndLimits() throws {

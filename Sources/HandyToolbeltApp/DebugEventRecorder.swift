@@ -44,7 +44,6 @@ final class DebugEventRecorder {
         guard isEnabled else { return }
         let reason: String
         switch value.message {
-        case "Corner finger lifted or moved. Lift all fingers and try again.": reason = "corner_contact_changed"
         case "Fingers are too close along the hand axis.": reason = "fingers_too_close"
         case "Move resting fingers away from the trackpad edge.": reason = "edge_deadzone"
         case "Bring the fingers closer together for an anchored gesture.": reason = "fingers_too_far"
@@ -54,7 +53,7 @@ final class DebugEventRecorder {
         }
         record(category: .recognition, event: "feedback", fields: ["phase": value.phase.rawValue, "reason": reason,
             "fingers": String(value.fingerCount), "kind": value.gesture?.kind.rawValue ?? "none",
-            "corner": value.gesture?.corner.rawValue ?? "none", "hold_seconds": String(value.holdTime),
+            "hold_seconds": String(value.holdTime),
             "tap_seconds": String(value.tapTime), "travel": String(value.travel), "separation": String(value.separation)])
     }
     private struct Export: Encodable {

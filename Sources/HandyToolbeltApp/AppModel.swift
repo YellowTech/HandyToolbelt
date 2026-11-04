@@ -15,10 +15,8 @@ enum TrackpadWorkspace: String, CaseIterable, Identifiable {
 final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration {
         didSet {
-            reconcileStackSelection()
             cancelPendingGestures()
-            stackRuntime.end()
-            if !configuration.trackpadModuleEnabled && !DebugEventRecorder.shared.isEnabled { stackKeyboard.stopMonitoring() }
+            if !configuration.trackpadModuleEnabled && !DebugEventRecorder.shared.isEnabled { keyboardMonitor.stopMonitoring() }
             recognizers.removeAll()
             haptics.cancel()
             if !configuration.trackpadModuleEnabled { cancelVisualFeedback() }
@@ -32,7 +30,6 @@ final class AppModel: ObservableObject {
     @Published var selectedID: UUID? {
         didSet {
             if selectedID != oldValue { cancelPendingGestures() }
-            if selectedID != nil { selectedStackChildID = nil; if selectedStackID != nil { selectedStackID = nil } }
             // Evaluate visibility at the selection change. A cached, detached
             // SwiftUI root can otherwise replay onChange after it reappears.
             if selectedID != oldValue, isSelected, showGym, !isCalibrating,
@@ -42,88 +39,24 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var selectedStackID: UUID? {
-        didSet {
-            if selectedStackID != oldValue { selectedStackChildID = nil }
-            if selectedStackID != nil && selectedID != nil { selectedID = nil }
-        }
-    }
-    @Published var selectedStackChildID: UUID?
-    @Published var expandedStackIDs = Set<UUID>()
-    func selectStackChild(_ childID: UUID, in stackID: UUID) {
-        selectedStackID = stackID; selectedStackChildID = childID
-        expandedStackIDs.insert(stackID)
-    }
-    func setStackExpanded(_ expanded: Bool, id: UUID) {
-        if expanded { expandedStackIDs.insert(id) }
-        else { expandedStackIDs.remove(id); if selectedStackID == id { selectedStackChildID = nil } }
-    }
-    private func reconcileStackSelection() {
-        expandedStackIDs.formIntersection(configuration.stacks.map(\.id))
-        if let id = selectedStackID {
-            guard let stack = configuration.stacks.first(where: { $0.id == id && $0.device == selectedDevice }) else {
-                selectedStackID = nil; selectedStackChildID = nil; return
-            }
-            if let child = selectedStackChildID, !stack.bindings.contains(where: { $0.id == child }) { selectedStackChildID = nil }
-        }
-    }
-    func addStackChild(_ stackID: UUID) {
-        guard let index = configuration.stacks.firstIndex(where: { $0.id == stackID }), configuration.stacks[index].bindings.count < ConfigurationLimits.maximumStackBindings else { return }
-        let stack = configuration.stacks[index]
-        let candidates: [GestureSpec] = GestureKind.allCases.flatMap { kind -> [GestureSpec] in (1...4).map { GestureSpec(kind: kind, fingers: $0).normalized(isStackChild: true) } }
-        let available: GestureSpec? = candidates.first(where: { gesture in
-            (stack.device == .trackpad || gesture.kind != .forceClick) &&
-                gesture.allowedFingerCounts(isStackChild: true).contains(gesture.fingers) &&
-                !stack.bindings.contains { $0.isEnabled && $0.gesture == gesture && $0.keyboardModifiers.overlaps(KeyboardModifierRequirement.any) }
-        })
-        let child = GestureStackBinding(gesture: available ?? .init(kind: .tap, fingers: 1),
-            actions: [.init(kind: .showText, text: "New gesture")], isEnabled: available != nil)
-        configuration.stacks[index].bindings.append(child)
-        selectStackChild(child.id, in: stackID)
-    }
-    func removeStackChild(_ childID: UUID, from stackID: UUID) {
-        guard let index = configuration.stacks.firstIndex(where: { $0.id == stackID }) else { return }
-        configuration.stacks[index].bindings.removeAll { $0.id == childID }
-    }
-    @Published private(set) var activeStackName: String?
-    private let stackKeyboard: StackKeyboardDriver
-    private(set) lazy var stackRuntime: GestureStackRuntime = {
-        let runtime = GestureStackRuntime(keyboard: stackKeyboard)
-        stackKeyboard.onUnavailable = { [weak self, weak runtime] in self?.cancelPendingGestures(); runtime?.end() }
-        stackKeyboard.onPhysicalModifiersChanged = { [weak self] in self?.cancelPendingGestures() }
-        stackKeyboard.onPhysicalKeyDown = { [weak self] in self?.physicalKeyDown() }
-        runtime.execute = { [weak self] action, completion in
-            guard let self else { return }
-            if action.kind == .automation, let id = action.automationID {
-                if let run = self.onAutomation { run(id, completion) }
-                else { completion(.failure(ActionExecutor.ActionError.message("The automation runner is unavailable."))) }
-            } else { self.executor.execute(action, completion: completion) }
-        }
-        runtime.onEnd = { [weak self] in
-            guard let self else { return }
-            self.cancelPendingGestures()
-            self.activeStackName = nil
-            self.liftRequired.formUnion(self.lastFrame.keys)
-            self.recognizers.removeAll()
-            self.cancelVisualFeedback()
-        }
-        runtime.onError = { [weak self] in self?.handleActionFailure($0) }
-        return runtime
-    }()
+    private let keyboardMonitor: GestureKeyboardMonitor
+
     func handleActionFailure(_ error: Error) {
         guard !(error is WindowSwitcherFailure) else { return }
         errorMessage = error.localizedDescription
     }
 
     private var liftRequired = Set<UInt64>()
-    private var stackTouchedDevices = Set<UInt64>()
     @Published var selectedDevice: InputDevice = .trackpad { didSet { if selectedDevice != oldValue { cancelPendingGestures() } } }
     @Published var devices: [TouchDevice] = [] {
-        didSet { if devices != oldValue { cancelPendingGestures() } }
+        didSet {
+            guard devices != oldValue else { return }
+            cancelPendingGestures()
+            let connectedIDs = Set(devices.map(\.id))
+            trackpadContactAdmission = trackpadContactAdmission.filter { connectedIDs.contains($0.key) }
+        }
     }
     @Published var contacts: [Contact] = []
-    @Published var activeCorner: Corner = .none
-    @Published var modifierFinger: Int?
     @Published var lastGesture: String = "Try a gesture"
     @Published var lastDetail: String = "Live touches appear here."
     @Published var lastEventID = UUID()
@@ -195,17 +128,15 @@ final class AppModel: ObservableObject {
     func physicalKeyDown(at time: Double = ProcessInfo.processInfo.systemUptime) {
         typingSuppression.keyDown(at: time)
         for (id, recognizer) in recognizers where !recognizer.contacts.isEmpty { typingSuppression.requireLift(deviceID: id) }
-        for id in stackTouchedDevices { typingSuppression.requireLift(deviceID: id) }
         DebugEventRecorder.shared.record(category: .keyboard, event: "physical_key_down")
         DebugEventRecorder.shared.record(category: .suppression, event: "typing_cooldown")
         cancelPendingGestures()
         cancelVisualFeedback()
-        stackRuntime.end()
         recognizers.removeAll()
     }
 
     private func cancelPendingGestures() {
-        pressGeneration = UUID(); nativePresses.cancel(); stackRuntime.cancelPresses()
+        pressGeneration = UUID(); nativePresses.cancel()
         cancelTemporalGestures()
     }
 
@@ -224,7 +155,6 @@ final class AppModel: ObservableObject {
         for deadline in temporalDeadlines.values { deadline.work.cancel() }
         temporalDeadlines.removeAll()
         for id in recognizers.keys { recognizers[id]?.cancelTemporalGestures() }
-        stackRuntime.cancelTemporalGestures()
     }
 
     private func scheduleTemporalDeadline(for deviceID: UInt64) {
@@ -246,7 +176,7 @@ final class AppModel: ObservableObject {
     func finishTemporalGestures(for deviceID: UInt64, at time: Double) {
         temporalDeadlines.removeValue(forKey: deviceID)?.work.cancel()
         guard !typingSuppression.coolingDown(at: time), !synchronizeFocusedApplication(), inputSessionAvailable, configuration.trackpadModuleEnabled,
-              stackRuntime.stack == nil, let device = devices.first(where: { $0.id == deviceID }),
+              let device = devices.first(where: { $0.id == deviceID }),
               var recognizer = recognizers[deviceID] else { return }
         let generation = temporalGeneration, sequence = recognizer.feedbackSequence
         let events = recognizer.advanceTime(to: time)
@@ -264,6 +194,21 @@ final class AppModel: ObservableObject {
     }
     private let haptics = HapticPlayer()
     private var recognizers: [UInt64: GestureRecognizer] = [:]
+    private struct ContactAdmission {
+        var down: Set<Int> = []
+        var ignored: Set<Int> = []
+
+        mutating func filter(_ contacts: [Contact], ids: Set<Int>, inset: Double) -> [Contact] {
+            ignored.formIntersection(ids)
+            for contact in contacts where !down.contains(contact.id) && !contact.position.isInsideSurface(inset: inset) {
+                ignored.insert(contact.id)
+            }
+            down = ids
+            return contacts.filter { !ignored.contains($0.id) }
+        }
+    }
+    // Keep onset decisions independent of recognizer resets for tuning and focus.
+    private var trackpadContactAdmission: [UInt64: ContactAdmission] = [:]
     private var lastFrame: [UInt64: Double] = [:]
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
@@ -296,7 +241,7 @@ final class AppModel: ObservableObject {
     init(storage: ConfigurationStore = .init(), nativeInputEnabled: Bool = true, observeSession: Bool = true,
          sessionIsActive: @escaping () -> Bool = AppModel.currentSessionIsActive,
          accessibilityTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
-         stackKeyboard: StackKeyboardDriver = StackKeyboardDriver(),
+         keyboardMonitor: GestureKeyboardMonitor = GestureKeyboardMonitor(),
          focusedApplication: @escaping () -> (bundleIdentifier: String?, processIdentifier: Int32?, name: String) = {
              let app = NSWorkspace.shared.frontmostApplication
              return (app?.bundleIdentifier, app?.processIdentifier, app?.localizedName ?? "")
@@ -307,7 +252,7 @@ final class AppModel: ObservableObject {
         self.sessionIsActive = sessionIsActive
         self.accessibilityTrusted = accessibilityTrusted
         self.focusedApplication = focusedApplication
-        self.stackKeyboard = stackKeyboard
+        self.keyboardMonitor = keyboardMonitor
         do { configuration = try storage.load() }
         catch {
             canSave = false
@@ -316,6 +261,9 @@ final class AppModel: ObservableObject {
             settingsNeedRecovery = true
             errorMessage = "Could not read saved mappings. The original file is preserved. \(error.localizedDescription)"
         }
+        keyboardMonitor.onUnavailable = { [weak self] in self?.cancelPendingGestures() }
+        keyboardMonitor.onPhysicalModifiersChanged = { [weak self] in self?.cancelPendingGestures() }
+        keyboardMonitor.onPhysicalKeyDown = { [weak self] in self?.physicalKeyDown() }
         executor.onShowText = { [weak self] action in self?.onShowText?(action) }
         selectedID = configuration.bindings.first?.id
         selectedGroupID = configuration.applicationGroups.first?.id
@@ -328,7 +276,7 @@ final class AppModel: ObservableObject {
                 "selected_device_kind": self.selectedDevice.rawValue, "typing_cooldown_seconds": "0.5",
                 "tap_duration": String(tuning.tapDuration), "tap_travel": String(tuning.tapTravel),
                 "long_touch_duration": String(tuning.longTouchDuration), "double_tap_interval": String(tuning.doubleTapInterval),
-                "anchor_hold": String(tuning.anchorHold), "corner_hold": String(tuning.cornerHold), "corner_size": String(tuning.cornerSize),
+                "anchor_hold": String(tuning.anchorHold),
                 "swipe_travel": String(tuning.swipeTravel), "hand_angle_degrees": String(tuning.handAngleDegrees),
                 "tip_separation": String(tuning.tipSeparation), "tip_max_separation": String(tuning.tipMaxSeparation), "edge_deadzone": String(tuning.tipEdgeDeadzone)]
         }
@@ -341,12 +289,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    var visibleStacks: [GestureStack] {
-        configuration.stacks.enumerated().filter { $0.element.device == selectedDevice }.sorted {
-            let left = scopeOrder($0.element.applicationGroupID), right = scopeOrder($1.element.applicationGroupID)
-            return left == right ? $0.offset < $1.offset : left < right
-        }.map(\.element)
-    }
     var visibleBindings: [GestureBinding] {
         configuration.bindings.enumerated().filter { $0.element.device == selectedDevice }.sorted {
             let left = scopeOrder($0.element.applicationGroupID), right = scopeOrder($1.element.applicationGroupID)
@@ -355,7 +297,7 @@ final class AppModel: ObservableObject {
     }
     var mappingScopeIDs: [UUID?] {
         let configured = configuration.applicationGroups.map { Optional($0.id) }
-        let missing = (visibleBindings.map(\.applicationGroupID) + visibleStacks.map(\.applicationGroupID))
+        let missing = visibleBindings.map(\.applicationGroupID)
             .compactMap { $0 }.filter { id in !configuration.applicationGroups.contains { $0.id == id } }
         return [nil] + configured + Array(Set(missing)).sorted { $0.uuidString < $1.uuidString }.map(Optional.some)
     }
@@ -371,7 +313,6 @@ final class AppModel: ObservableObject {
     var status: String {
         if !isRunning { return "Gestures stopped" }
         if inputError != nil { return "Input unavailable" }
-        if let activeStackName { return "Stack active · " + activeStackName }
         if gymActive { return "Gesture gym · actions paused" }
         if !hasAccessibility { return "Accessibility needed" }
         return "Gestures enabled" + (focusedApplicationName.isEmpty ? "" : " · \(focusedApplicationName)")
@@ -380,7 +321,7 @@ final class AppModel: ObservableObject {
         !gymActive && frontmostBundleID != nil && frontmostBundleID != Bundle.main.bundleIdentifier
     }
     var canRunActions: Bool {
-        !typingSuppression.coolingDown(at: ProcessInfo.processInfo.systemUptime) && isRunning && configuration.trackpadModuleEnabled && !windowChooserVisible && stackRuntime.stack == nil && productionFocusAllowsActions && hasAccessibility && sessionActive && isAwake
+        !typingSuppression.coolingDown(at: ProcessInfo.processInfo.systemUptime) && isRunning && configuration.trackpadModuleEnabled && !windowChooserVisible && productionFocusAllowsActions && hasAccessibility && sessionActive && isAwake
     }
     var gymHasChanges: Bool { gymDrafts[selectedDevice].map { $0.validated != configuration.tuning(for: selectedDevice) } ?? false }
     var devicesWithGymChanges: [InputDevice] {
@@ -409,7 +350,7 @@ final class AppModel: ObservableObject {
     }
     private var canShowGestureToast: Bool {
         isRunning && isAwake && sessionActive && configuration.trackpadModuleEnabled &&
-        configuration.displayModuleEnabled && configuration.visualFeedbackEnabled && !windowChooserVisible && stackRuntime.stack == nil &&
+        configuration.displayModuleEnabled && configuration.visualFeedbackEnabled && !windowChooserVisible &&
         !gymActive &&
         frontmostBundleID != Bundle.main.bundleIdentifier
     }
@@ -492,7 +433,7 @@ final class AppModel: ObservableObject {
         configuration.applicationGroups[index] = group
     }
 
-    func groupUseCount(_ id: UUID) -> Int { configuration.bindings.filter { $0.applicationGroupID == id }.count + configuration.stacks.filter { $0.applicationGroupID == id }.count }
+    func groupUseCount(_ id: UUID) -> Int { configuration.bindings.filter { $0.applicationGroupID == id }.count }
 
     func removeGroup(_ id: UUID) {
         guard groupUseCount(id) == 0 else { return }
@@ -546,7 +487,6 @@ final class AppModel: ObservableObject {
         let changed = focusContext.update(bundleIdentifier: bundleIdentifier, processIdentifier: processIdentifier)
         if changed {
             cancelPendingGestures()
-            if bundleIdentifier == Bundle.main.bundleIdentifier { stackRuntime.end() }
             haptics.cancel()
             focusChangedAt = ProcessInfo.processInfo.systemUptime
             focusedApplicationName = name
@@ -638,9 +578,7 @@ final class AppModel: ObservableObject {
         // Contacts held across suspension must lift before recognition resumes.
         // Idle devices can start their next gesture immediately after unlocking.
         liftRequired.formUnion(recognizers.compactMap { $0.value.contacts.isEmpty ? nil : $0.key })
-        // The runtime releases owned modifiers before its required release actions.
-        stackRuntime.end()
-        stackKeyboard.stopMonitoring()
+        keyboardMonitor.stopMonitoring()
         inputMonitoringActive = false
         input?.stop()
         clickMonitor.stop()
@@ -664,7 +602,6 @@ final class AppModel: ObservableObject {
             if input == nil { input = try MultitouchInput() }
             input?.onFrame = { [weak self] device, contacts, time in self?.receive(device, contacts, time) }
             input?.onDevicesChanged = { [weak self] devices in
-                if let owner = self?.stackRuntime.deviceID, !devices.contains(where: { $0.id == owner }) { self?.stackRuntime.end() }
                 self?.cancelPendingGestures()
                 self?.haptics.cancel()
                 if let id = self?.calibrationDeviceID, !devices.contains(where: { $0.id == id }) {
@@ -675,7 +612,7 @@ final class AppModel: ObservableObject {
                 self?.touchVisualization.reset()
                 self?.focusContext.forgetDevices(except: Set(devices.map(\.id)))
             }
-            input?.onError = { [weak self] error in self?.cancelPendingGestures(); self?.stackRuntime.end(); self?.inputError = error }
+            input?.onError = { [weak self] error in self?.cancelPendingGestures(); self?.inputError = error }
             input?.refresh(force: true)
         } catch { inputError = error.localizedDescription }
         clickMonitor.onClick = { [weak self] button, time in self?.physicalClick(button: button, at: time) ?? false }
@@ -696,7 +633,6 @@ final class AppModel: ObservableObject {
         refreshPermissions()
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if self.stackRuntime.stack != nil && ProcessInfo.processInfo.systemUptime - self.stackRuntime.lastFrame > 0.8 { self.stackRuntime.end() }
             self.refreshPermissions()
             let now = ProcessInfo.processInfo.systemUptime
             if self.inputSessionAvailable && self.nativeInputEnabled && now - self.lastRefresh > 6 {
@@ -730,8 +666,7 @@ final class AppModel: ObservableObject {
 
     func stop() {
         cancelPendingGestures()
-        stackRuntime.end()
-        stackKeyboard.stopMonitoring()
+        keyboardMonitor.stopMonitoring()
         isRunning = false
         inputMonitoringActive = false
         cancelVisualFeedback()
@@ -742,8 +677,9 @@ final class AppModel: ObservableObject {
         for observer in lockObservers { DistributedNotificationCenter.default().removeObserver(observer) }
         lockObservers.removeAll()
         recognizers = [:]; lastFrame = [:]; contacts = []; devices = []
+        trackpadContactAdmission.removeAll()
         touchVisualization.reset()
-        activeCorner = .none; modifierFinger = nil; clicksAvailable = false
+        clicksAvailable = false
         stopCalibration()
         focusContext = GestureFocusContext()
     }
@@ -751,14 +687,12 @@ final class AppModel: ObservableObject {
     // The watchdog runs even when no fingers are down. Do not invalidate every
     // settings view just to assign the same idle state again.
     func clearContactReadout() {
-        if !gymSnapshot.contacts.isEmpty || gymSnapshot.modifier != .none || gymSnapshot.modifierFinger != nil {
+        if !gymSnapshot.contacts.isEmpty {
             var snapshot = gymSnapshot
-            snapshot.contacts = []; snapshot.modifier = .none; snapshot.modifierFinger = nil
+            snapshot.contacts = []
             gymSnapshot = snapshot
         }
         if !contacts.isEmpty { contacts = [] }
-        if activeCorner != .none { activeCorner = .none }
-        if modifierFinger != nil { modifierFinger = nil }
     }
 
     func refreshPermissions() {
@@ -768,11 +702,11 @@ final class AppModel: ObservableObject {
             if !trusted { cancelPendingGestures() }
         }
         if !hasAccessibility || !inputSessionAvailable {
-            pressGeneration = UUID(); nativePresses.cancel(); stackRuntime.cancelPresses()
-            stackRuntime.end(); stackKeyboard.stopMonitoring()
+            pressGeneration = UUID(); nativePresses.cancel()
+            keyboardMonitor.stopMonitoring()
         }
-        else if nativeInputEnabled && (configuration.trackpadModuleEnabled || DebugEventRecorder.shared.isEnabled) { stackKeyboard.startMonitoring() }
-        else { stackKeyboard.stopMonitoring() }
+        else if nativeInputEnabled && (configuration.trackpadModuleEnabled || DebugEventRecorder.shared.isEnabled) { keyboardMonitor.startMonitoring() }
+        else { keyboardMonitor.stopMonitoring() }
         let available: Bool
         if hasAccessibility && inputSessionAvailable && nativeInputEnabled { available = clickMonitor.start() }
         else { clickMonitor.stop(); available = false }
@@ -824,23 +758,6 @@ final class AppModel: ObservableObject {
         refreshPermissions()
     }
 
-    func addStack() {
-        selectWorkspace(.mappings)
-        let stack = GestureStack(device: selectedDevice)
-        configuration.stacks.append(stack); selectedStackID = stack.id; expandedStackIDs.insert(stack.id)
-    }
-    func updateStack(_ stack: GestureStack) {
-        guard let index = configuration.stacks.firstIndex(where: { $0.id == stack.id }) else { return }
-        configuration.stacks[index] = stack
-    }
-    func removeStack(_ id: UUID) {
-        let wasSelected = selectedStackID == id
-        configuration.stacks.removeAll { $0.id == id }
-        if wasSelected {
-            selectedStackID = visibleStacks.first?.id
-            if selectedStackID == nil { selectedID = visibleBindings.first?.id }
-        }
-    }
     func addBinding() {
         selectWorkspace(.mappings)
         // A harmless, complete action lets new mappings begin active without executing commands.
@@ -864,7 +781,6 @@ final class AppModel: ObservableObject {
         configuration.bindings.removeAll { $0.id == id }
         if wasSelected {
             selectedID = visibleBindings.first?.id
-            if selectedID == nil { selectedStackID = visibleStacks.first?.id }
         }
     }
     func selectDevice(_ device: InputDevice) {
@@ -872,8 +788,7 @@ final class AppModel: ObservableObject {
         haptics.cancel()
         stopCalibration()
         selectedDevice = device; selectedID = visibleBindings.first?.id
-        selectedStackID = selectedID == nil ? visibleStacks.first?.id : nil
-        contacts = []; activeCorner = .none; modifierFinger = nil
+        contacts = []
         touchVisualization.reset()
         gymTuning = gymDrafts[device] ?? configuration.tuning(for: device)
         if showGym {
@@ -914,18 +829,6 @@ final class AppModel: ObservableObject {
     func recognitionTuning(for device: InputDevice) -> GestureTuning {
         gymActive && device == selectedDevice ? gymTuning.validated : configuration.tuning(for: device)
     }
-    func recognitionCorners(for device: InputDevice) -> Set<Corner> {
-        let previewing = frontmostBundleID == Bundle.main.bundleIdentifier
-        var corners = Set(configuration.bindings.filter {
-            $0.device == device && $0.keyboardModifiers.matches(stackKeyboard.physicalModifiers) && (($0.isEnabled && configuration.applies($0, to: frontmostBundleID)) || (previewing && $0.id == selectedID))
-        }.map { $0.gesture.corner }.filter { $0 != .none })
-        if productionFocusAllowsActions {
-            corners.formUnion(configuration.stacks.filter { $0.device == device && $0.isEnabled && $0.keyboardModifiers.matches(stackKeyboard.physicalModifiers) && configuration.matchStack(device: device, corner: $0.corner, frontmostBundleIdentifier: frontmostBundleID, keyboardModifiers: stackKeyboard.physicalModifiers)?.id == $0.id }.map(\.corner))
-        }
-        if gymActive && device == selectedDevice { corners = gymGesture.corner == .none ? [] : [gymGesture.corner] }
-        return corners
-    }
-
     func recognitionTemporalSpecs(for device: InputDevice) -> Set<GestureSpec> {
         if gymActive {
             return device == selectedDevice && (gymGesture.kind == .longTouch || gymGesture.kind == .doubleTap || gymGesture.kind.isDoubleTipTap) ? [gymGesture] : []
@@ -941,43 +844,49 @@ final class AppModel: ObservableObject {
         // accidentally falling through to an unrelated single-tap action.
         return Set(configuration.bindings.filter {
             $0.isEnabled && $0.device == device && ($0.gesture.kind == .longTouch || $0.gesture.kind == .doubleTap || $0.gesture.kind.isDoubleTipTap) &&
-            $0.keyboardModifiers.matches(stackKeyboard.physicalModifiers) && configuration.applies($0, to: frontmostBundleID)
+            $0.keyboardModifiers.matches(keyboardMonitor.physicalModifiers) && configuration.applies($0, to: frontmostBundleID)
         }.map(\.gesture))
     }
 
     // Kept internal so headless lifecycle checks can replay raw frames without
     // constructing the native input driver or dispatching a configured action.
-    func receive(_ device: TouchDevice, _ points: [Contact], _ time: Double) {
-        DebugEventRecorder.shared.touch(deviceID: device.id, contacts: points, kind: device.kind, aspectRatio: device.aspectRatio, frameTime: time)
-        // Session suspension must still release stack-owned keys, even when the
-        // typing policy is waiting for a full lift. Reject queued/invalid frames
-        // before they can clear either barrier or update the visualization.
-        guard inputSessionAvailable else { stackRuntime.end(); return }
+    func receive(_ device: TouchDevice, _ rawPoints: [Contact], _ time: Double) {
+        DebugEventRecorder.shared.touch(deviceID: device.id, contacts: rawPoints, kind: device.kind, aspectRatio: device.aspectRatio, frameTime: time)
+        // Reject queued or invalid frames before they can clear a lift barrier
+        // or update the visualization.
+        guard inputSessionAvailable else { return }
         guard time.isFinite, time >= focusChangedAt, time >= (lastFrame[device.id] ?? -.infinity) else {
             DebugEventRecorder.shared.record(category: .suppression, event: "stale_or_invalid_touch_frame")
-            if stackRuntime.stack != nil { stackRuntime.end() }
             return
         }
         lastFrame[device.id] = time
+        let ids = Set(rawPoints.map(\.id))
+        guard rawPoints.count <= 10, rawPoints.count == ids.count,
+              rawPoints.allSatisfy({ $0.position.isInsideSurface(inset: 0) }) else {
+            nativePresses.validate { _ in false }
+            recognizers[device.id] = nil
+            scheduleTemporalDeadline(for: device.id)
+            return
+        }
+        let tuning = recognitionTuning(for: device.kind)
+        let points: [Contact]
+        if device.kind == .trackpad && !ids.isEmpty {
+            points = trackpadContactAdmission[device.id, default: ContactAdmission()].filter(rawPoints, ids: ids, inset: tuning.tipEdgeDeadzone)
+        } else {
+            trackpadContactAdmission.removeValue(forKey: device.id)
+            points = rawPoints
+        }
         if typingSuppression.suppresses(deviceID: device.id, hasContacts: !points.isEmpty, at: time) {
             recognizers[device.id] = nil
-            if points.isEmpty { liftRequired.remove(device.id); stackTouchedDevices.remove(device.id) }
+            if points.isEmpty { liftRequired.remove(device.id) }
             if previewVisible && device.kind == selectedDevice {
                 touchVisualization.submit(GymSnapshot(contacts: points), deviceID: device.id, at: time)
                 if contacts.map(\.id) != points.map(\.id) { contacts = points }
-                if activeCorner != .none { activeCorner = .none }
-                if modifierFinger != nil { modifierFinger = nil }
             }
             return
         }
         nativePresses.validate { $0.contacts.accepts(deviceID: device.id, contacts: points, at: time) }
 
-        if stackRuntime.stack != nil {
-            if points.isEmpty { stackTouchedDevices.remove(device.id) } else { stackTouchedDevices.insert(device.id); liftRequired.insert(device.id) }
-            if !isRunning || !sessionActive || !isAwake || !configuration.trackpadModuleEnabled { stackRuntime.end(); return }
-            stackRuntime.frame(deviceID: device.id, contacts: points, time: time, cornerSize: configuration.tuning(for: device.kind).cornerSize, pressed: nativeInputEnabled && CGEventSource.buttonState(.combinedSessionState, button: .left))
-            return
-        }
         if liftRequired.contains(device.id) {
             // A stale queued lift, invalid timestamp, or suspended callback must
             // not clear the barrier for contacts still held after resuming.
@@ -996,29 +905,15 @@ final class AppModel: ObservableObject {
         guard focusContext.acceptsFrame(deviceID: device.id, hasContacts: !points.isEmpty) else { return }
         var recognizer = recognizers[device.id] ?? GestureRecognizer()
         recognizer.usesTrackpadEdgeDeadzone = device.kind == .trackpad
-        recognizer.tuning = recognitionTuning(for: device.kind)
+        recognizer.tuning = tuning
         recognizer.surfaceAspectRatio = device.aspectRatio
         let previousSequence = recognizer.feedbackSequence
-        let corners = recognitionCorners(for: device.kind)
         let pressed = nativeInputEnabled && (0...2).contains { CGEventSource.buttonState(.combinedSessionState, button: CGMouseButton(rawValue: UInt32($0))!) }
-        let events = recognizer.process(points, at: time, enabledCorners: corners, physicalButtonDown: pressed,
+        let events = recognizer.process(points, at: time, physicalButtonDown: pressed,
             eligibleTemporalSpecs: recognitionTemporalSpecs(for: device.kind))
         if recognizer.feedbackSequence != previousSequence { DebugEventRecorder.shared.feedback(recognizer.feedback) }
         recognizers[device.id] = recognizer
         scheduleTemporalDeadline(for: device.id)
-        nativePresses.validate { press in
-            press.contacts.deviceID != device.id || points.isEmpty ||
-                (recognizer.modifier == press.contacts.corner && recognizer.modifierFinger == press.contacts.cornerFinger)
-        }
-        lastFrame[device.id] = time
-        if canRunActions, let finger = recognizer.modifierFinger,
-           let stack = configuration.matchStack(device: device.kind, corner: recognizer.modifier, frontmostBundleIdentifier: frontmostBundleID, keyboardModifiers: stackKeyboard.physicalModifiers) {
-            cancelVisualFeedback(); activeStackName = stack.name
-            stackTouchedDevices = [device.id]; liftRequired.insert(device.id)
-            cancelPendingGestures()
-            stackRuntime.begin(stack, deviceID: device.id, fingerID: finger, time: time, tuning: configuration.tuning(for: device.kind), aspect: device.aspectRatio)
-            return
-        }
         let windowVisible = previewVisible
         if gymActive && windowVisible && device.kind == selectedDevice {
             train(points, device: device, time: time, pressed: pressed)
@@ -1034,7 +929,6 @@ final class AppModel: ObservableObject {
                 if trails.count > 10 { trails = trails.filter { id, _ in points.contains { $0.id == id } } }
                 if recognizer.feedbackSequence != previousSequence { recordGymFeedback(recognizer.feedback) }
                 let snapshot = GymSnapshot(contacts: points, trails: trails, feedback: recognizer.feedback,
-                    modifier: recognizer.modifier, modifierFinger: recognizer.modifierFinger,
                     aspectRatio: device.aspectRatio, measuredAspect: device.hasMeasuredAspect, deviceName: device.name)
                 touchVisualization.submit(snapshot, deviceID: device.id, at: time)
                 // Text needn't redraw the entire form at the contact sampling rate.
@@ -1047,13 +941,10 @@ final class AppModel: ObservableObject {
         }
         if windowVisible && device.kind == selectedDevice {
             if !showGym {
-                touchVisualization.submit(GymSnapshot(contacts: points, modifier: recognizer.modifier,
-                    modifierFinger: recognizer.modifierFinger), deviceID: device.id, at: time)
+                touchVisualization.submit(GymSnapshot(contacts: points), deviceID: device.id, at: time)
             }
-            // The compact readout only needs finger membership and corner changes.
+            // The compact readout only needs finger membership.
             if contacts.map(\.id) != points.map(\.id) { contacts = points }
-            if activeCorner != recognizer.modifier { activeCorner = recognizer.modifier }
-            if modifierFinger != recognizer.modifierFinger { modifierFinger = recognizer.modifierFinger }
         }
         let generation = temporalGeneration
         for event in events { _ = handle(event, from: device.kind, supportsHaptics: device.supportsForce, temporalGeneration: generation) }
@@ -1063,10 +954,7 @@ final class AppModel: ObservableObject {
     func pressureChanged(stage: Int, at time: Double) {
         guard !typingSuppression.coolingDown(at: time), isRunning, isAwake, sessionActive, configuration.trackpadModuleEnabled else { cancelPendingGestures(); return }
         guard !synchronizeFocusedApplication() else { return }
-        if stackRuntime.stack != nil {
-            if stackTouchedDevices.count == 1 { stackRuntime.pressure(stage: stage, at: time) }
-            else { stackRuntime.cancelPresses() }
-        } else if let press = nativePresses.stage(stage, at: time), valid(press, at: time) {
+        if let press = nativePresses.stage(stage, at: time), valid(press, at: time) {
             var force = press.gesture; force.kind = .forceClick
             reportPhysical(force, device: press.device, nativeGeneration: press.generation)
         }
@@ -1078,7 +966,7 @@ final class AppModel: ObservableObject {
     }
 
     private func valid(_ press: PressSnapshot, at time: Double) -> Bool {
-        press.generation == pressGeneration && press.modifiers == stackKeyboard.physicalModifiers &&
+        press.generation == pressGeneration && press.modifiers == keyboardMonitor.physicalModifiers &&
         isRunning && isAwake && sessionActive && hasAccessibility && configuration.trackpadModuleEnabled &&
         time - press.contacts.lastFrame < 0.15 && devices.contains(where: { $0.id == press.device.id && $0.supportsForce && $0.kind == .trackpad })
     }
@@ -1086,7 +974,7 @@ final class AppModel: ObservableObject {
     func physicalRelease(button: Int64, at time: Double) {
         guard button == 0 else { return }
         touchVisualization.updatePress(stage: 0)
-        nativePresses.release(at: time); stackRuntime.release(at: time)
+        nativePresses.release(at: time)
         DispatchQueue.main.asyncAfter(deadline: .now() + NativePressArbiter<PressSnapshot>.releaseGrace) { [weak self] in
             self?.finishNativePresses(at: time + NativePressArbiter<PressSnapshot>.releaseGrace)
         }
@@ -1094,7 +982,6 @@ final class AppModel: ObservableObject {
 
     func finishNativePresses(at time: Double) {
         guard !synchronizeFocusedApplication() else { return }
-        stackRuntime.finishPresses(at: time)
         for press in nativePresses.finish(at: time) where valid(press, at: time) {
             if press.gesture.allowedFingerCounts().contains(press.gesture.fingers) { reportPhysical(press.gesture, device: press.device, nativeGeneration: press.generation) }
         }
@@ -1109,11 +996,6 @@ final class AppModel: ObservableObject {
         cancelTemporalGestures()
         if button != 0 && nativePresses.hasPending { return false }
         guard !synchronizeFocusedApplication() else { return false }
-        if stackRuntime.stack != nil {
-            guard stackTouchedDevices.count == 1, stackTouchedDevices.contains(stackRuntime.deviceID ?? 0),
-                  let device = devices.first(where: { $0.id == stackRuntime.deviceID }) else { stackRuntime.cancelPresses(); return false }
-            return stackRuntime.click(at: now, primary: button == 0, supportsForce: device.kind == .trackpad && device.supportsForce)
-        }
         let candidates = recognizers.keys.filter { !(recognizers[$0]?.contacts.isEmpty ?? true) && now - (lastFrame[$0] ?? 0) < 0.15 }
         if candidates.count == 1, let id = candidates.first,
            devices.first(where: { $0.id == id })?.kind == selectedDevice, previewVisible { touchVisualization.updatePress(stage: 1) }
@@ -1130,13 +1012,12 @@ final class AppModel: ObservableObject {
         let forcePreview = previewVisible && frontmostBundleID == Bundle.main.bundleIdentifier && device.kind == selectedDevice && previewTarget == force
         // Any applicable force candidate reserves the press, including ambiguous scopes.
         let forceMapped = configuration.bindings.contains { $0.isEnabled && $0.device == device.kind && $0.gesture == force &&
-            $0.keyboardModifiers.matches(stackKeyboard.physicalModifiers) && configuration.applies($0, to: frontmostBundleID) }
+            $0.keyboardModifiers.matches(keyboardMonitor.physicalModifiers) && configuration.applies($0, to: frontmostBundleID) }
         if button == 0 && device.kind == .trackpad && device.supportsForce && (forcePreview || forceMapped) {
             guard isRunning, isAwake, sessionActive, hasAccessibility, configuration.trackpadModuleEnabled,
                   let recognizer = recognizers[id] else { return false }
             nativePresses.begin(PressSnapshot(contacts: NativePressContacts(deviceID: id, contacts: recognizer.contacts,
-                corner: gesture.corner, cornerFinger: recognizer.modifierFinger, cornerSize: recognizer.tuning.cornerSize,
-                time: lastFrame[id] ?? now, movementTolerance: recognizer.tuning.tapTravel), gesture: gesture, device: device, modifiers: stackKeyboard.physicalModifiers, generation: pressGeneration), at: now)
+                time: lastFrame[id] ?? now), gesture: gesture, device: device, modifiers: keyboardMonitor.physicalModifiers, generation: pressGeneration), at: now)
             return false // macOS needs the native down/up to produce pressure stages.
         }
         guard gesture.allowedFingerCounts().contains(gesture.fingers) else { return false }
@@ -1159,14 +1040,14 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult private func handle(_ gesture: GestureSpec, from device: InputDevice, supportsHaptics: Bool, nativeGeneration: UUID? = nil, temporalGeneration: UUID? = nil) -> Bool {
-        DebugEventRecorder.shared.record(category: .recognition, event: "gesture", fields: ["kind": gesture.kind.rawValue, "fingers": String(gesture.fingers), "corner": gesture.corner.rawValue])
+        DebugEventRecorder.shared.record(category: .recognition, event: "gesture", fields: ["kind": gesture.kind.rawValue, "fingers": String(gesture.fingers)])
         guard !typingSuppression.coolingDown(at: ProcessInfo.processInfo.systemUptime) else { return false }
         guard !synchronizeFocusedApplication(), temporalGeneration.map({ self.temporalGeneration == $0 }) ?? true else { return false }
-        let binding = configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: frontmostBundleID, keyboardModifiers: stackKeyboard.physicalModifiers)
+        let binding = configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: frontmostBundleID, keyboardModifiers: keyboardMonitor.physicalModifiers)
         DebugEventRecorder.shared.record(category: .recognition, event: "binding_match", fields: ["matched": String(binding != nil)])
         if device == selectedDevice {
             lastGesture = gymActive ? gesture.title : (binding?.displayName ?? gesture.title)
-            lastDetail = gesture.corner == .none ? (binding?.action.title ?? "No matching action") : "\(gesture.corner.title) · \(binding?.action.title ?? "No matching action")"
+            lastDetail = binding?.action.title ?? "No matching action"
             lastEventID = UUID()
         }
         if isRunning && configuration.trackpadModuleEnabled && supportsHaptics && configuration.hapticsInPractice && previewVisible && !isCalibrating && device == selectedDevice &&
@@ -1187,7 +1068,7 @@ final class AppModel: ObservableObject {
                     guard nativeGeneration.map({ self.pressGeneration == $0 }) ?? true,
                           temporalGeneration.map({ self.temporalGeneration == $0 }) ?? true, self.feedbackGeneration == generation, self.focusContext.generation == focusGeneration,
                           self.canShowGestureToast, binding?.showsToast != false,
-                          self.configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: self.frontmostBundleID, keyboardModifiers: self.stackKeyboard.physicalModifiers) == binding else { return }
+                          self.configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: self.frontmostBundleID, keyboardModifiers: self.keyboardMonitor.physicalModifiers) == binding else { return }
                     self.onToast?(binding?.displayName ?? gesture.title)
                 }
             }
@@ -1201,7 +1082,7 @@ final class AppModel: ObservableObject {
             self.synchronizeFocusedApplication()
             guard nativeGeneration.map({ self.pressGeneration == $0 }) ?? true,
                           temporalGeneration.map({ self.temporalGeneration == $0 }) ?? true, self.feedbackGeneration == feedbackGeneration, self.canRunActions, self.focusContext.generation == focusGeneration,
-                  self.configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: self.frontmostBundleID, keyboardModifiers: self.stackKeyboard.physicalModifiers) == binding else { return }
+                  self.configuration.match(device: device, gesture: gesture, frontmostBundleIdentifier: self.frontmostBundleID, keyboardModifiers: self.keyboardMonitor.physicalModifiers) == binding else { return }
             DebugEventRecorder.shared.record(category: .recognition, event: "action_dispatch")
             if supportsHaptics { self.haptics.play(binding.hapticPattern ?? self.configuration.hapticPattern) }
             if self.canShowGestureToast && binding.showsToast && binding.action.kind != .showText {

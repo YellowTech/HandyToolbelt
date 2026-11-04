@@ -26,7 +26,6 @@ if CommandLine.arguments.dropFirst().elementsEqual(["--generate-docs"]) {
     try run(["Scripts/check-gesture-performance.swift"])
     try run(["Scripts/check-gym-transition.swift"])
     try run(["Scripts/check-control-integration.swift"])
-    try run(["Scripts/check-gesture-stack-runtime.swift"])
     try run(["Scripts/check-force-click-model.swift"])
     try run(["Scripts/check-temporal-gesture-model.swift"])
     try run(["Scripts/check-typing-suppression-model.swift"])

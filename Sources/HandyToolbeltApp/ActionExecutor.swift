@@ -35,7 +35,7 @@ final class ActionExecutor {
             }
             return
         }
-        // Keep window-action failures identifiable through gestures, stacks and automation.
+        // Keep window-action failures identifiable through gestures and automation.
         // Callers still receive failure; interactive dispatch simply suppresses its modal.
         let completion = action.kind == .system && action.system.isWindowAction
             ? { (result: Result<String, Error>) in completion(result.mapError { WindowSwitcherFailure($0) }) }

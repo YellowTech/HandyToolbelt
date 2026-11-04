@@ -36,7 +36,7 @@ struct WindowPreviewSetupView: View {
         .padding(24).frame(width: 480)
         .background(Theme.editor)
         .graphiteTheme()
-        .background(PreviewSetupWindowLifecycle(onHidden: model.dismiss, onWindowChanged: { window in
+        .background(PermissionSetupWindowLifecycle(onHidden: model.dismiss, onWindowChanged: { window in
             model.presentationIsVisible = { [weak window] in
                 guard let window else { return false }
                 return window.isVisible && !window.isMiniaturized
@@ -94,9 +94,9 @@ struct WindowPreviewSetupView: View {
 
 /// Closing or minimizing the settings window ends the authorization session;
 /// switching away for System Settings or a native permission alert does not.
-private struct PreviewSetupWindowLifecycle: NSViewRepresentable {
+struct PermissionSetupWindowLifecycle: NSViewRepresentable {
     let onHidden: () -> Void
-    let onWindowChanged: (NSWindow?) -> Void
+    var onWindowChanged: (NSWindow?) -> Void = { _ in }
     func makeNSView(context: Context) -> ObserverView { ObserverView(onHidden: onHidden, onWindowChanged: onWindowChanged) }
     func updateNSView(_ nsView: ObserverView, context: Context) { nsView.onHidden = onHidden; nsView.onWindowChanged = onWindowChanged }
     final class ObserverView: NSView {

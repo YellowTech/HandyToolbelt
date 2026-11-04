@@ -82,8 +82,6 @@ private func anchors(_ count: Int) -> [Contact] {
     #expect(GestureSpec(kind: .tipTapMiddle).fingers == 3)
     #expect(GestureSpec(kind: .tipSwipeUp, fingers: 5).normalized().fingers == 4)
     #expect(GestureSpec(kind: .tipTapMiddle, fingers: 2).normalized().fingers == 3)
-    #expect(GestureSpec(kind: .tap).allowedFingerCounts(isStackChild: true) == [1, 2, 3, 4])
-    #expect(GestureSpec(kind: .tipTapRight, fingers: 4, corner: .topLeft).totalFingerCount == 5)
     let legacy = Data(#"{"kind":"tipTapLeft","fingers":2,"corner":"none"}"#.utf8)
     #expect(try JSONDecoder().decode(GestureSpec.self, from: legacy) == .init(kind: .tipTapLeft))
     var config = AppConfiguration()
@@ -98,27 +96,6 @@ private func anchors(_ count: Int) -> [Contact] {
     _ = r.process(held, at: 0)
     _ = r.process(held + [Contact(id: 3, x: 0.5, y: 0.5)], at: 0.2)
     #expect(r.process(held, at: 0.28) == [.init(kind: .tipTapMiddle)])
-}
-
-@Test func fourFreeFingerAnchoredSwipeWithCornerAndStackCounts() throws {
-    var r = GestureRecognizer()
-    let corner = Contact(id: 90, x: 0.05, y: 0.95)
-    let corners: Set<Corner> = [.topLeft]
-    let held = anchors(3)
-    _ = r.process([corner], at: 0, enabledCorners: corners)
-    _ = r.process([corner], at: 0.3, enabledCorners: corners)
-    _ = r.process([corner] + held, at: 0.32, enabledCorners: corners)
-    _ = r.process([corner] + held + [Contact(id: 8, x: 0.75, y: 0.5)], at: 0.52, enabledCorners: corners)
-    #expect(r.process([corner] + held + [Contact(id: 8, x: 0.95, y: 0.5)], at: 0.58, enabledCorners: corners) == [.init(kind: .tipSwipeRight, fingers: 4, corner: .topLeft)])
-    #expect(r.physicalClick(at: 0.59) == nil)
-    #expect(r.process([corner] + held, at: 0.62, enabledCorners: corners).isEmpty)
-    #expect(r.process([], at: 0.65, enabledCorners: corners).isEmpty)
-    var configuration = AppConfiguration()
-    configuration.stacks = [.init(name: "Anchored", isEnabled: true, bindings: [.init(gesture: .init(kind: .tipSwipeRight, fingers: 4), actions: [.init(system: .nextTab)])])]
-    #expect(configuration.validation().errors.isEmpty)
-    let restored = try JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(configuration))
-    #expect(restored.version == 6)
-    #expect(restored.stacks.first?.bindings.first?.gesture.fingers == 4)
 }
 
 @Test func anchoredClickDispatchIsIndependentOfRawButtonOrdering() {
@@ -157,17 +134,4 @@ private func anchors(_ count: Int) -> [Contact] {
     _ = r.process(held, at: 0.6)
     _ = r.process(held + [active], at: 0.8)
     #expect(r.process(held, at: 0.88) == [.init(kind: .tipTapRight, fingers: 3)])
-}
-
-@Test func cornerAcquisitionAndAnchoredAttemptCannotCreateChordTap() {
-    var r = GestureRecognizer()
-    let corner = Contact(id: 90, x: 0.05, y: 0.95)
-    let anchor = Contact(id: 1, x: 0.5, y: 0.5)
-    let tapper = Contact(id: 2, x: 0.75, y: 0.5)
-    let corners: Set<Corner> = [.topLeft]
-    _ = r.process([corner, anchor], at: 0, enabledCorners: corners)
-    #expect(r.process([corner, anchor, tapper], at: 0.26, enabledCorners: corners).isEmpty)
-    #expect(r.process([corner, anchor], at: 0.32, enabledCorners: corners) == [.init(kind: .tipTapRight, corner: .topLeft)])
-    #expect(r.process([corner], at: 0.38, enabledCorners: corners).isEmpty)
-    #expect(r.process([], at: 0.4, enabledCorners: corners).isEmpty)
 }

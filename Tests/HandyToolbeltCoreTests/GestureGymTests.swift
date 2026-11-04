@@ -55,7 +55,6 @@ private func calibrated(angle: Double = 25) -> TipTapCalibration {
         #expect(abs(settings.handAngleDegrees - angle) < 1)
         #expect(settings.tapDuration >= 0.15)
         #expect(settings.tipSeparation > 0.02)
-        #expect(settings.cornerHold == GestureTuning().cornerHold)
         #expect(settings.swipeTravel == GestureTuning().swipeTravel)
     }
 }
@@ -163,13 +162,4 @@ private func calibrated(angle: Double = 25) -> TipTapCalibration {
     #expect(r.process([anchor], at: 0.61).isEmpty)
     #expect(r.feedback.phase == .rejected)
     #expect(r.feedbackSequence == 1)
-}
-
-@Test func configurableCornerSizeChangesAcquisition() {
-    var r = GestureRecognizer()
-    r.tuning.cornerSize = 0.30
-    let point = Contact(id: 1, x: 0.27, y: 0.73)
-    _ = r.process([point], at: 0, enabledCorners: [.topLeft])
-    _ = r.process([point], at: 0.3, enabledCorners: [.topLeft])
-    #expect(r.modifier == .topLeft)
 }

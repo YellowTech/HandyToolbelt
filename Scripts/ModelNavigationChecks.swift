@@ -3,6 +3,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import ScreenCaptureKit
 import ApplicationServices
 import IOKit.pwr_mgt
 import HandyToolbeltControl
@@ -205,16 +206,16 @@ struct ModelNavigationChecks {
         check(commands == ["confirm"], "Modifier-release confirmation has priority over Shift navigation")
         reset(); send(.flagsChanged, 56, shifted, marker: ActionExecutor.eventMarker); send(.flagsChanged, 56, option, marker: ActionExecutor.eventMarker)
         check(commands.isEmpty, "Ordinary action events remain excluded")
-        send(.keyDown, 48, shifted, marker: StackKeyboardDriver.eventMarker); send(.keyUp, 48, shifted, marker: StackKeyboardDriver.eventMarker)
-        check(commands == ["step-1"], "Stack Shift-Tab continues through the keyboard routing")
+        send(.keyDown, 48, shifted); send(.keyUp, 48, shifted)
+        check(commands == ["step-1"], "Physical Shift-Tab continues through the keyboard routing")
         send(.flagsChanged, 56, shifted); send(.flagsChanged, 56, option)
-        check(commands == ["step-1", "step-1"], "Stack temporary Shift flags cannot suppress the next physical Shift tap")
+        check(commands == ["step-1", "step-1"], "Shift-Tab cannot suppress the next physical Shift tap")
         reset(); send(.flagsChanged, 56, shifted); monitor.stop(); monitor.chooserOpen = true; send(.flagsChanged, 56, option)
         check(commands.isEmpty, "Stopping clears pending Shift taps")
     }
 
     static func checkWindowPreviewService() {
-        func drain() { RunLoop.main.run(until: Date().addingTimeInterval(0.006)) }
+        func drain(_ time: TimeInterval = 0.006) { RunLoop.main.run(until: Date().addingTimeInterval(time)) }
         let frame = CGRect(x: 0, y: 0, width: 1000, height: 700)
         let items = (0..<40).map { WindowItem(processID: 42, appName: "Fixture", bundleIdentifier: "fixture", title: "Document \($0)", frame: frame) }
         let candidates = items.enumerated().map { WindowPreviewCandidate(id: UInt32($0.offset + 1), processID: 42, title: $0.element.captureTitle, frame: frame) }
@@ -279,6 +280,76 @@ struct ModelNavigationChecks {
         check(backend.sizes.allSatisfy { $0.width <= 480 && $0.height <= 300 }, "Every requested image respects pixel bounds")
         previews.end()
         check(previews.images.isEmpty, "Closing chooser immediately removes all cached images")
+
+        let first = items[0].id
+        let transient = WindowPreviewCaptureError.imageUnavailable
+        previews.begin(items: items); previews.setVisible([first])
+        backend.completeLoad(error: transient); drain()
+        check(backend.loads.isEmpty, "A failed enumeration backs off before retrying")
+        drain(0.16)
+        check(backend.loads.count == 1, "A transient enumeration failure retries once")
+        backend.completeLoad(); drain()
+        backend.completeCapture(error: transient); drain()
+        check(backend.captures.isEmpty, "A failed capture backs off before retrying")
+        previews.setVisible([]); drain(0.11)
+        check(backend.captures.isEmpty, "An offscreen row never runs a retry")
+        previews.setVisible([first])
+        check(backend.captures.first?.id == 1, "A visible row can resume its pending retry")
+        backend.completeCapture(error: transient); drain(0.22)
+        check(backend.captures.first?.id == 1, "A second transient failure uses the second retry")
+        backend.completeCapture(error: transient); drain(0.22)
+        check(backend.captures.isEmpty && previews.images.isEmpty, "Capture retry budget is exhausted after two retries")
+
+        previews.begin(items: items); previews.setVisible([first])
+        backend.candidates = []; backend.completeLoad(); drain(0.16)
+        check(backend.loads.count == 1 && backend.captures.isEmpty, "An unmatched row refreshes the candidate list once")
+        backend.candidates = candidates; backend.completeLoad(); drain()
+        backend.completeCapture(error: transient); drain(0.11)
+        backend.completeCapture(); drain()
+        check(previews.images[first] != nil, "A successful retry publishes the recovered preview")
+
+        previews.begin(items: items); previews.setVisible([first])
+        backend.candidates = [candidates[0]]
+        previews.setVisible([items[1].id])
+        backend.completeLoad(); drain(0.16)
+        backend.completeLoad(error: transient); drain(0.16)
+        check(backend.loads.isEmpty, "A failed candidate refresh cannot start a third enumeration")
+        previews.setVisible([first])
+        check(backend.captures.first?.id == 1, "A failed candidate refresh preserves previously matched windows")
+        backend.completeCapture(); drain()
+        backend.candidates = candidates
+
+        let permanent = NSError(domain: SCStreamErrorDomain, code: SCStreamError.Code.invalidParameter.rawValue)
+        previews.begin(items: items); previews.setVisible([first])
+        backend.completeLoad(); drain(); backend.completeCapture(error: permanent); drain(0.11)
+        check(backend.captures.isEmpty, "Invalid capture configuration does not retry")
+        previews.begin(items: items); previews.setVisible([first])
+        backend.completeLoad(error: permanent); drain(0.16)
+        check(backend.loads.isEmpty, "Permanent enumeration failure does not retry")
+
+        previews.begin(items: items); previews.setVisible([first])
+        backend.completeLoad(); drain(); backend.completeCapture(error: transient); drain()
+        previews.begin(items: items); previews.setVisible([first])
+        backend.completeLoad(); drain(0.11)
+        check(backend.captures.count == 1, "A retry from the previous chooser cannot enqueue native work")
+        previews.end(); backend.completeCapture(); drain()
+
+        previews.begin(items: items)
+        for index in 0..<9 {
+            previews.setVisible([items[index].id])
+            if index == 0 { backend.completeLoad(); drain() }
+            backend.completeCapture(error: transient); drain()
+        }
+        drain(0.11)
+        check(backend.captures.isEmpty, "Repeated failures across rows exhaust a shared chooser retry budget")
+        previews.end()
+
+        var hidden = items[0]
+        hidden.isHidden = true
+        previews.begin(items: [hidden]); previews.setVisible([hidden.id])
+        check(backend.loads.isEmpty, "Rows ineligible for preview do not start enumeration")
+        previews.end()
+
     }
 
     static func checkWindowPreviewSetup() {
@@ -438,7 +509,7 @@ struct ModelNavigationChecks {
         for version in 1...5 {
             let raw = Data("{\"version\":\(version),\"bindings\":[],\"isEnabled\":false}".utf8)
             let migrated = try JSONDecoder().decode(AppConfiguration.self, from: raw)
-            check(migrated.version == 6 && migrated.powerModuleEnabled, "Version \(version) enables read-only Power when migrated")
+            check(migrated.version == 7 && migrated.powerModuleEnabled, "Version \(version) enables read-only Power when migrated")
         }
         var config = AppConfiguration(); config.powerModuleEnabled = false
         check(try !JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(config)).powerModuleEnabled, "Disabled Power preference roundtrips")
@@ -465,11 +536,9 @@ struct ModelNavigationChecks {
 
     static func checkInputSessionLifecycle(directory: URL) throws {
         var active = false
-        var events: [String] = []
-        let keyboard = StackKeyboardDriver(physicalModifiers: [], emit: { _, down, _, _ in events.append(down ? "down" : "up") })
         let model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("input-session.json")),
                              nativeInputEnabled: false, observeSession: false, sessionIsActive: { active },
-                             accessibilityTrusted: { true }, stackKeyboard: keyboard)
+                             accessibilityTrusted: { true })
         defer { model.stop() }
         model.start()
         check(model.isRunning && !model.inputSessionAvailable && !model.inputMonitoringActive && !model.clicksAvailable,
@@ -479,26 +548,15 @@ struct ModelNavigationChecks {
         check(!model.inputMonitoringActive && !model.clicksAvailable, "Refresh, reconnect, and watchdog cannot resume unavailable input")
         active = true; model.handleInputSessionEvent(.unlock)
         check(model.inputSessionAvailable && model.inputMonitoringActive, "Unlock resumes only after the session query succeeds")
-        model.stackRuntime.execute = { action, completion in events.append(action.text); completion(.success("done")) }
-        let stack = GestureStack(name: "Lifecycle", corner: .topLeft,
-                                 startActions: [.init(kind: .holdModifiers, modifiers: [.option])],
-                                 releaseActions: [.init(kind: .showText, text: "release")])
-        func beginStack() {
-            model.stackRuntime.begin(stack, deviceID: 1, fingerID: 1, time: ProcessInfo.processInfo.systemUptime, tuning: .init(), aspect: 1.6)
-        }
         for ending in [AppModel.InputSessionEvent.lock, .sleep, .resign] {
-            events = []; beginStack(); model.startCalibration()
+            model.startCalibration()
             model.contacts = [.init(id: 1, x: 0.1, y: 0.9)]
-            model.activeCorner = .topLeft
             model.handleInputSessionEvent(ending)
             check(!model.inputSessionAvailable && !model.inputMonitoringActive && !model.clicksAvailable,
                   "Lock, sleep, and session resignation suspend all input monitoring")
-            check(model.stackRuntime.stack == nil && events == ["down", "up", "release"],
-                  "Session loss releases owned modifiers before required release actions exactly once")
-            check(!model.isCalibrating && model.contacts.isEmpty && model.activeCorner == .none,
+            check(!model.isCalibrating && model.contacts.isEmpty,
                   "Session loss cancels calibration and clears contact state")
             model.refreshPermissions(); model.handleInputSessionEvent(ending)
-            check(events == ["down", "up", "release"], "Repeated session loss and permission refresh do not duplicate releases")
             active = false; model.handleInputSessionEvent(.wake)
             check(!model.inputSessionAvailable && !model.inputMonitoringActive, "Wake while still locked cannot resume input")
             model.handleInputSessionEvent(.unlock)
@@ -508,7 +566,7 @@ struct ModelNavigationChecks {
         }
         // No configured actions or force-capable device: this only observes
         // recognition feedback and cannot post keys, capture, or actuate haptics.
-        model.configuration.bindings = []; model.configuration.stacks = []
+        model.configuration.bindings = []
         let device = TouchDevice(id: 42, kind: .trackpad, name: "Synthetic", aspectRatio: 1.6, hasMeasuredAspect: true, supportsForce: false)
         let fingers = [Contact(id: 1, x: 0.4, y: 0.5), Contact(id: 2, x: 0.6, y: 0.5)]
         let time = ProcessInfo.processInfo.systemUptime + 0.01
@@ -555,47 +613,6 @@ struct ModelNavigationChecks {
             let model = AppModel(storage: storage, nativeInputEnabled: false, observeSession: false, accessibilityTrusted: accessibilityTrusted)
             return (model, ProductivityModel(trackpad: model, display: DisplayModel(presenter: nil, observeSession: false), controlServerEnabled: false), storage)
         }
-
-        let (folderModel, _, _) = try fixture("stack-folders")
-        folderModel.addStack()
-        let folderID = folderModel.selectedStackID!
-        folderModel.addStackChild(folderID)
-        let childID = folderModel.selectedStackChildID!
-        check(folderModel.configuration.stacks.first!.bindings.first!.isEnabled, "New available folder gestures start active with a harmless action")
-        check(folderModel.expandedStackIDs.contains(folderID) && folderModel.selectedID == nil, "Adding a child expands its folder and selects its individual editor")
-        folderModel.setStackExpanded(false, id: folderID)
-        check(folderModel.selectedStackID == folderID && folderModel.selectedStackChildID == nil, "Collapsing a selected child returns to folder configuration")
-        folderModel.selectStackChild(childID, in: folderID)
-        let other = GestureStack(name: "Other")
-        folderModel.configuration.stacks.append(other)
-        folderModel.removeStack(other.id)
-        check(folderModel.selectedStackChildID == childID, "Removing another folder preserves child selection")
-        folderModel.removeStackChild(childID, from: folderID)
-        check(folderModel.selectedStackID == folderID && folderModel.selectedStackChildID == nil, "Deleting the selected child selects its folder")
-        folderModel.addStackChild(folderID)
-        let collision = folderID
-        folderModel.configuration.bindings[0].id = collision
-        folderModel.configuration.stacks[0].bindings[0].id = collision
-        folderModel.sidebarSelection = .binding(collision)
-        check(folderModel.selectedID == collision && folderModel.selectedStackID == nil, "Typed sidebar selects ordinary mapping despite folder and child UUID collision")
-        folderModel.sidebarSelection = .stack(collision)
-        check(folderModel.selectedStackID == collision && folderModel.selectedStackChildID == nil, "Typed sidebar selects folder despite child UUID collision")
-        folderModel.sidebarSelection = .child(stack: collision, child: collision)
-        check(folderModel.selectedID == nil && folderModel.selectedStackChildID == collision && folderModel.sidebarSelection == .child(stack: collision, child: collision), "Typed sidebar retains explicit child parent identity")
-        var remainingBinding = folderModel.configuration.bindings.first!; remainingBinding.id = collision
-        let unselectedBinding = folderModel.configuration.bindings.last!.id
-        folderModel.removeBinding(unselectedBinding)
-        check(folderModel.sidebarSelection == .child(stack: collision, child: collision), "Deleting an ordinary mapping preserves selected folder child")
-        folderModel.configuration.bindings = [remainingBinding]
-        folderModel.sidebarSelection = .binding(collision)
-        folderModel.removeBinding(collision)
-        check(folderModel.sidebarSelection == .stack(folderID), "Deleting final selected ordinary mapping selects remaining folder")
-        var imported = folderModel.configuration; imported.stacks = []
-        try folderModel.replaceConfiguration(imported)
-        check(folderModel.selectedStackID == nil && folderModel.selectedStackChildID == nil && folderModel.expandedStackIDs.isEmpty, "Import removes stale folder selection and expansion")
-        folderModel.addStack(); folderModel.addStackChild(folderModel.selectedStackID!)
-        folderModel.selectDevice(.magicMouse)
-        check(folderModel.selectedStackChildID == nil, "Switching device clears child selection")
 
         let (_, statusHost, _) = try fixture("status-menu")
         checkStatusMenu(statusHost)
@@ -707,19 +724,17 @@ struct ModelNavigationChecks {
         model.configuration.trackpadModuleEnabled = true
         model.selectWorkspace(.gym)
         model.gymTuning.handAngleDegrees = 35
-        model.gymGesture.corner = .topRight
-        model.configuration.bindings = [.init(gesture: .init(kind: .tipTapLeft, corner: .bottomLeft), action: .init(system: .nextTab))]
         model.updateFocusedApplication(bundleIdentifier: Bundle.main.bundleIdentifier, processIdentifier: ProcessInfo.processInfo.processIdentifier)
-        check(model.gymActive && model.recognitionTuning(for: .trackpad) == model.gymTuning.validated && model.recognitionCorners(for: .trackpad) == [.topRight], "Frontmost Gym uses draft tuning and practice corners")
+        check(model.gymActive && model.recognitionTuning(for: .trackpad) == model.gymTuning.validated, "Frontmost Gym uses draft tuning")
         model.updateFocusedApplication(bundleIdentifier: "com.apple.Safari", processIdentifier: 999)
-        check(model.productionFocusAllowsActions && !model.gymActive && model.showGym && model.recognitionTuning(for: .trackpad) == model.configuration.trackpadTuning && model.recognitionCorners(for: .trackpad) == [.bottomLeft], "Background Gym restores saved production tuning and corners without changing workspace")
+        check(model.productionFocusAllowsActions && !model.gymActive && model.showGym && model.recognitionTuning(for: .trackpad) == model.configuration.trackpadTuning, "Background Gym restores saved production tuning without changing workspace")
         model.isRecordingShortcut = true
         model.selectWorkspace(.groups)
-        check(model.productionFocusAllowsActions && model.recognitionCorners(for: .trackpad) == [.bottomLeft], "Background groups and shortcut recording preserve production corners")
+        check(model.productionFocusAllowsActions, "Background groups and shortcut recording preserve production focus")
         model.isRecordingShortcut = false
         model.selectWorkspace(.gym)
         model.updateFocusedApplication(bundleIdentifier: Bundle.main.bundleIdentifier, processIdentifier: ProcessInfo.processInfo.processIdentifier)
-        check(model.gymActive && model.recognitionCorners(for: .trackpad) == [.topRight], "Returning to HandyToolbelt restores the Gym draft")
+        check(model.gymActive, "Returning to HandyToolbelt restores the Gym draft")
 
         model.configuration.trackpadModuleEnabled = false
         model.configuration.windowSwitcher.isEnabled = false
@@ -767,18 +782,6 @@ struct ModelNavigationChecks {
         routing.selectWorkspace(.gym)
         routing.gymTuning.handAngleDegrees = -24
         routingHost.section = .windows
-        routingHost.addWindowStackExample()
-        let example = routing.configuration.stacks.first!
-        check(!example.isEnabled && example.corner == .topLeft && example.bindings.count == 2, "Window stack starts inactive with a corner hold and two child gestures")
-        check(example.startActions.first?.kind == .holdModifiers && example.startActions.first?.modifiers == [.option] && example.startActions.last?.action.shortcut?.keyCode == 48, "Window stack uses held Option plus an ordinary Tab key press")
-        check(example.bindings.allSatisfy { $0.actions.first?.kind == .shortcut } && example.releaseActions.isEmpty, "Window stack uses keyboard bindings and automatic release only")
-        check(routingHost.section == .trackpad && routing.workspace == .mappings && routing.selectedDevice == .trackpad && routing.selectedStackID == example.id, "Window stack route selects its own editor")
-        let examplesCount = routing.configuration.stacks.count
-        routingHost.addWindowStackExample()
-        check(routing.configuration.stacks.count == examplesCount, "Adding the window stack twice preserves the existing example")
-        routing.selectDevice(.magicMouse)
-        routing.selectWorkspace(.gym)
-        check(routing.gymTuning.handAngleDegrees == -24, "Window example route preserves hidden mouse draft")
         routing.stop()
         check(routing.gymTuning.handAngleDegrees == -24 && routing.hasUnappliedGymChanges, "Stopping input preserves all trial settings")
 
@@ -791,8 +794,19 @@ struct ModelNavigationChecks {
         seed.selectDevice(.magicMouse)
         seed.selectWorkspace(.gym)
         check(seed.gymGesture == mouseGesture, "First Gym visit after switching device practices its selected mapping")
-        seedHost.addWindowStackExample()
-        check(seed.configuration.stacks.first { $0.id == seed.selectedStackID }?.device == .trackpad, "Window example route selects a trackpad stack even after editing a mouse mapping")
+        let legacyURL = directory.appendingPathComponent("legacy-settings.json")
+        let legacyStore = ConfigurationStore(url: legacyURL)
+        let legacyData = Data("{\"version\":6, \"bindings\":[], \"stacks\":[]}\n".utf8)
+        try legacyData.write(to: legacyURL)
+        var legacyMigrated = try legacyStore.load()
+        let legacyBackup = legacyURL.appendingPathExtension("pre-v7")
+        check(legacyMigrated.version == 7 && !FileManager.default.fileExists(atPath: legacyBackup.path),
+              "Reading legacy settings leaves the original and backup untouched")
+        try legacyStore.save(legacyMigrated)
+        check(try Data(contentsOf: legacyBackup) == legacyData, "First save preserves exact legacy settings bytes")
+        legacyMigrated.displayModuleEnabled.toggle()
+        try legacyStore.save(legacyMigrated)
+        check(try Data(contentsOf: legacyBackup) == legacyData, "Later saves leave the legacy backup unchanged")
 
         let invalid = directory.appendingPathComponent("invalid.json")
         let invalidData = Data("invalid settings".utf8)

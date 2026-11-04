@@ -6,16 +6,14 @@ public struct GestureTuning: Codable, Equatable, Sendable {
     public var tapDuration = 0.30
     public var tapTravel = 0.035
     public var anchorHold = 0.16
-    public var cornerHold = 0.25
     public var swipeTravel = 0.13
     public var handAngleDegrees = 0.0
     public var tipSeparation = 0.055
     public var tipMaxSeparation = 0.45
     public var tipEdgeDeadzone = 0.06
-    public var cornerSize = 0.22
     public init() {}
 
-    private enum CodingKeys: String, CodingKey { case tipMaxSeparation, tipEdgeDeadzone, tapDuration, tapTravel, anchorHold, cornerHold, swipeTravel, handAngleDegrees, tipSeparation, cornerSize, longTouchDuration, doubleTapInterval }
+    private enum CodingKeys: String, CodingKey { case tipMaxSeparation, tipEdgeDeadzone, tapDuration, tapTravel, anchorHold, swipeTravel, handAngleDegrees, tipSeparation, longTouchDuration, doubleTapInterval }
     public init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -24,11 +22,9 @@ public struct GestureTuning: Codable, Equatable, Sendable {
         tapDuration = try values.decode(Double.self, forKey: .tapDuration)
         tapTravel = try values.decode(Double.self, forKey: .tapTravel)
         anchorHold = try values.decode(Double.self, forKey: .anchorHold)
-        cornerHold = try values.decode(Double.self, forKey: .cornerHold)
         swipeTravel = try values.decode(Double.self, forKey: .swipeTravel)
         handAngleDegrees = try values.decode(Double.self, forKey: .handAngleDegrees)
         tipSeparation = try values.decode(Double.self, forKey: .tipSeparation)
-        cornerSize = try values.decode(Double.self, forKey: .cornerSize)
         longTouchDuration = try values.decodeIfPresent(Double.self, forKey: .longTouchDuration) ?? longTouchDuration
         doubleTapInterval = try values.decodeIfPresent(Double.self, forKey: .doubleTapInterval) ?? doubleTapInterval
     }
@@ -40,11 +36,9 @@ public struct GestureTuning: Codable, Equatable, Sendable {
         "tapDuration": 0.10...0.80,
         "tapTravel": 0.01...0.12,
         "anchorHold": 0.05...0.50,
-        "cornerHold": 0.10...0.80,
         "swipeTravel": 0.05...0.35,
         "handAngleDegrees": -60...60,
         "tipSeparation": 0.02...0.20,
-        "cornerSize": 0.10...0.35,
         "tipMaxSeparation": 0.15...0.80,
         "tipEdgeDeadzone": 0...0.15,
     ]
@@ -59,13 +53,11 @@ public struct GestureTuning: Codable, Equatable, Sendable {
         result.tapDuration = clamp(tapDuration, Self.bounds["tapDuration"]!, 0.30)
         result.tapTravel = clamp(tapTravel, Self.bounds["tapTravel"]!, 0.035)
         result.anchorHold = clamp(anchorHold, Self.bounds["anchorHold"]!, 0.16)
-        result.cornerHold = clamp(cornerHold, Self.bounds["cornerHold"]!, 0.25)
         result.swipeTravel = clamp(swipeTravel, Self.bounds["swipeTravel"]!, 0.13)
         result.handAngleDegrees = clamp(handAngleDegrees, Self.bounds["handAngleDegrees"]!, 0)
         result.tipSeparation = clamp(tipSeparation, Self.bounds["tipSeparation"]!, 0.055)
         result.tipMaxSeparation = clamp(tipMaxSeparation, Self.bounds["tipMaxSeparation"]!, 0.45)
         result.tipEdgeDeadzone = clamp(tipEdgeDeadzone, Self.bounds["tipEdgeDeadzone"]!, 0.06)
-        result.cornerSize = clamp(cornerSize, Self.bounds["cornerSize"]!, 0.22)
         return result
     }
 

@@ -48,9 +48,7 @@ final class WindowKeyboardMonitor {
             if let tap = tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
         }
-        // Ordinary action shortcuts stay excluded to prevent feedback loops. Stack
-        // keyboard events deliberately use StackKeyboardDriver.eventMarker so a
-        // held Option + Tab sequence follows the same chooser path as hardware.
+        // Ignore app-generated shortcuts to prevent feedback loops.
         guard event.getIntegerValueField(.eventSourceUserData) != ActionExecutor.eventMarker else { return false }
         let key = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let wasShiftHeld = shiftHeld

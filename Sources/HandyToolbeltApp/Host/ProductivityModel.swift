@@ -53,7 +53,6 @@ final class ProductivityModel: ObservableObject {
     func validateSettingsImportState() throws {
         let guidance: String?
         if automationRunner.active != nil { guidance = "Wait for the running automation to finish, or cancel it in Automations & CLI, before importing." }
-        else if trackpad.activeStackName != nil { guidance = "Release the active gesture stack before importing." }
         else if trackpad.isCalibrating { guidance = "Finish or cancel calibration in Gestures → Gesture Gym before importing." }
         else if trackpad.hasUnappliedGymChanges { guidance = "Apply or revert your trial settings in Gestures → Gesture Gym before importing." }
         else { guidance = nil }
@@ -62,11 +61,13 @@ final class ProductivityModel: ObservableObject {
     enum SettingsTarget: String { case accessibility, screenRecording, overlays }
     @Published private(set) var settingsTarget: SettingsTarget?
     @Published private(set) var settingsNavigationID = UUID()
+    @Published private(set) var isAccessibilitySetupPresented = false
     var onRevealMainWindow: (() -> Void)?
     func revealSettings(_ target: SettingsTarget) {
         settingsTarget = target; settingsNavigationID = UUID(); section = .settings
     }
     func openPreviewSetup() {
+        guard !isAccessibilitySetupPresented else { return }
         windows.cancel()
         revealSettings(.screenRecording)
         NSApp.activate(ignoringOtherApps: true)
@@ -74,9 +75,19 @@ final class ProductivityModel: ObservableObject {
         // Let the destination sheet host mount before presenting.
         let navigationID = settingsNavigationID
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.section == .settings, self.settingsNavigationID == navigationID, !self.isRestarting else { return }
+            guard let self, self.section == .settings, self.settingsNavigationID == navigationID,
+                  !self.isRestarting, !self.isAccessibilitySetupPresented else { return }
             self.windows.openPreviewSetup()
         }
+    }
+    func openAccessibilitySetup() {
+        guard section == .settings, !isRestarting, !windows.previewSetup.isPresented else { return }
+        refreshPermissions()
+        isAccessibilitySetupPresented = true
+    }
+    func dismissPermissionSetup() {
+        if isAccessibilitySetupPresented { isAccessibilitySetupPresented = false }
+        if windows.previewSetup.isPresented { windows.previewSetup.dismiss() }
     }
     func consumeSettingsNavigation(_ id: UUID) {
         guard settingsNavigationID == id else { return }
@@ -98,7 +109,7 @@ final class ProductivityModel: ObservableObject {
         catch { revealSettings(.accessibility) }
     }
     @Published var section: ProductivitySection = .trackpad {
-        didSet { trackpad.setSelected(section == .trackpad); if section != .display { display.cancelProgressPreview() }; if section != .settings { windows.previewSetup.dismiss() } }
+        didSet { trackpad.setSelected(section == .trackpad); if section != .display { display.cancelProgressPreview() }; if section != .settings { dismissPermissionSetup() } }
     }
     @Published private(set) var isRestarting = false
     @Published var errorMessage: String?
@@ -204,28 +215,6 @@ final class ProductivityModel: ObservableObject {
         guard started else { return }
         if config.trackpadModuleEnabled { trackpad.start() } else { trackpad.stop() }
         windows.configure(config.windowSwitcher)
-    }
-    private static let windowStackExampleID = UUID(uuidString: "DC611861-7D14-41A5-8B99-676B715F826A")!
-    func addWindowStackExample() {
-        let id = Self.windowStackExampleID
-        if !hasWindowStackExample {
-            let modifiers = KeyboardModifier.modifiers(from: trackpad.configuration.windowSwitcher.shortcut.modifiers)
-            let next = GestureAction(kind: .shortcut, shortcut: .init(keyCode: 48, modifiers: 0, keyLabel: "⇥"))
-            let previous = GestureAction(kind: .shortcut, shortcut: .init(keyCode: 48, modifiers: KeyboardModifier.shift.flag, keyLabel: "⇥"))
-            let stack = GestureStack(id: id, name: "Window switching", device: .trackpad, corner: .topLeft,
-                keyboardModifiers: .none, isEnabled: false,
-                startActions: [.init(kind: .holdModifiers, modifiers: modifiers), .init(action: next)],
-                bindings: [.init(gesture: .init(kind: .tipTapLeft), actions: [previous]),
-                           .init(gesture: .init(kind: .tipTapRight), actions: [next])])
-            trackpad.configuration.stacks.append(stack)
-        }
-        trackpad.selectDevice(.trackpad)
-        trackpad.selectWorkspace(.mappings)
-        trackpad.selectedStackID = id
-        section = .trackpad
-    }
-    var hasWindowStackExample: Bool {
-        trackpad.configuration.stacks.contains { $0.id == Self.windowStackExampleID }
     }
 }
 

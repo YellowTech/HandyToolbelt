@@ -127,7 +127,7 @@ import HandyToolbeltCore
    // every family rather than feeding any synthetic input to the recognizer.
    for count in [Int.min, -1, 0, 99, Int.max] {
      for kind in GestureKind.allCases {
-       let spec = GestureSpec(kind: kind, fingers: count, corner: .topLeft)
+       let spec = GestureSpec(kind: kind, fingers: count)
        let glyphs = NSHostingView(rootView: VStack {
          GestureGlyph(gesture: spec).frame(width: 40, height: 28)
          GestureHowTo(gesture: spec).frame(width: 560)

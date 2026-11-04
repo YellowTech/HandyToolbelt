@@ -68,37 +68,12 @@ private func fingers(_ count: Int, dx: Double = 0, dy: Double = 0) -> [Contact] 
     #expect(r.process([], at: 0.14).isEmpty)
 }
 
-@Test func cornerModifierExcludesHeldFingerAndSupportsRepeat() {
+@Test func touchInCornerDoesNotStealOrdinaryGestures() {
     var r = GestureRecognizer()
     let corner = Contact(id: 9, x: 0.07, y: 0.94)
-    let corners: Set<Corner> = [.topLeft]
-    _ = r.process([corner], at: 0, enabledCorners: corners)
-    _ = r.process([corner], at: 0.27, enabledCorners: corners)
-    #expect(r.modifier == .topLeft)
-    for (time, count) in [(0.3, 2), (0.6, 1)] {
-        _ = r.process([corner] + fingers(count), at: time, enabledCorners: corners)
-        #expect(r.process([corner], at: time + 0.12, enabledCorners: corners) == [.init(kind: .tap, fingers: count, corner: .topLeft)])
-    }
-    #expect(r.process([], at: 0.8, enabledCorners: corners).isEmpty)
-}
-
-@Test func releasingCornerCannotTriggerUnmodifiedTap() {
-    var r = GestureRecognizer()
-    let corner = Contact(id: 9, x: 0.07, y: 0.94)
-    let corners: Set<Corner> = [.topLeft]
-    _ = r.process([corner], at: 0, enabledCorners: corners)
-    _ = r.process([corner], at: 0.26, enabledCorners: corners)
-    _ = r.process([corner] + fingers(3), at: 0.3, enabledCorners: corners)
-    #expect(r.process(fingers(3), at: 0.36, enabledCorners: corners).isEmpty)
-    #expect(r.process([], at: 0.4, enabledCorners: corners).isEmpty)
-}
-
-@Test func unusedCornersDoNotStealOrdinaryGestures() {
-    var r = GestureRecognizer()
-    let corner = Contact(id: 9, x: 0.07, y: 0.94)
-    _ = r.process([corner], at: 0)
-    _ = r.process([corner], at: 0.28)
-    #expect(r.modifier == .none)
+    let chord = [corner, Contact(id: 2, x: 0.3, y: 0.7)]
+    #expect(r.process(chord, at: 0).isEmpty)
+    #expect(r.process([], at: 0.1) == [.init(kind: .tap, fingers: 2)])
 }
 
 @Test func swipeFiresOnceAndDoesNotTapOnRelease() {
@@ -155,29 +130,6 @@ private func fingers(_ count: Int, dx: Double = 0, dy: Double = 0) -> [Contact] 
     config.bindings.append(.init(gesture: original.gesture, action: .init(kind: .shortcut)))
     #expect(config.hasConflict(original))
     #expect(config.match(device: .trackpad, gesture: original.gesture) == nil)
-}
-
-@Test func tipTapWithCornerModifier() {
-    var r = GestureRecognizer()
-    let corner = Contact(id: 9, x: 0.06, y: 0.94)
-    let anchor = Contact(id: 1, x: 0.5, y: 0.5)
-    let corners: Set<Corner> = [.topLeft]
-    _ = r.process([corner], at: 0, enabledCorners: corners)
-    _ = r.process([corner], at: 0.26, enabledCorners: corners)
-    _ = r.process([corner, anchor], at: 0.3, enabledCorners: corners)
-    _ = r.process([corner, anchor, .init(id: 2, x: 0.7, y: 0.5)], at: 0.5, enabledCorners: corners)
-    #expect(r.process([corner, anchor], at: 0.61, enabledCorners: corners) == [.init(kind: .tipTapRight, corner: .topLeft)])
-}
-
-@Test func cornerClickCountsOnlyFreeFingers() {
-    var r = GestureRecognizer()
-    let corner = Contact(id: 9, x: 0.06, y: 0.94)
-    let corners: Set<Corner> = [.topLeft]
-    _ = r.process([corner], at: 0, enabledCorners: corners)
-    _ = r.process([corner], at: 0.26, enabledCorners: corners)
-    _ = r.process([corner] + fingers(3), at: 0.3, enabledCorners: corners)
-    #expect(r.physicalClick(at: 0.32) == .init(kind: .click, fingers: 3, corner: .topLeft))
-    #expect(r.process([corner], at: 0.4, enabledCorners: corners).isEmpty)
 }
 
 @Test func invalidFrameCancelsInProgressGesture() {

@@ -25,9 +25,8 @@ struct GesturePerformanceChecks {
         for _ in 0..<100 { model.clearContactReadout() }
         check(modelChanges == 0, "Idle watchdog must not invalidate forms")
         model.contacts = [Contact(id: 1, x: 0.2, y: 0.3)]
-        model.activeCorner = .topLeft; model.modifierFinger = 1
         model.clearContactReadout()
-        check(model.contacts.isEmpty && model.activeCorner == .none && model.modifierFinger == nil, "Watchdog clears live state")
+        check(model.contacts.isEmpty, "Watchdog clears live state")
         modelChanges = 0
         for _ in 0..<100 { model.touchVisualization.reset() }
         print("100 idle visualization resets: \(visualChanges) visualization notifications")
@@ -46,10 +45,9 @@ struct GesturePerformanceChecks {
         check(modelChanges == 0, "Attempt history must not invalidate the parent forms")
         var stale = model.gymSnapshot
         stale.contacts = [Contact(id: 1, x: 0.2, y: 0.3)]
-        stale.modifier = .topLeft; stale.modifierFinger = 1
         model.gymSnapshot = stale
         model.clearContactReadout()
-        check(model.gymSnapshot.contacts.isEmpty && model.gymSnapshot.modifier == .none && model.gymSnapshot.modifierFinger == nil,
+        check(model.gymSnapshot.contacts.isEmpty,
               "Watchdog releases diagnostic contacts and modifiers")
         check(model.gymSnapshot.feedback == stale.feedback, "Watchdog retains the diagnostic result")
         modelChanges = 0; visualChanges = 0

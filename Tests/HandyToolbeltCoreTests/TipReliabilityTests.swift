@@ -94,25 +94,17 @@ import Testing
     #expect(r.process(held, at: 0.43, eligibleTemporalSpecs: enabled) == [.init(kind: .doubleTipTapMiddle)])
 }
 
-@Test func doubleTipSupportsCornerAndStackCounts() throws {
-    let spec = GestureSpec(kind: .doubleTipTapRight, fingers: 4, corner: .topLeft)
+@Test func doubleTipSupportsFourFingers() {
+    let spec = GestureSpec(kind: .doubleTipTapRight, fingers: 4)
     var r = GestureRecognizer()
-    let corner = Contact(id: 90, x: 0.02, y: 0.98)
     let held = [Contact(id: 1, x: 0.4, y: 0.5), Contact(id: 2, x: 0.46, y: 0.5), Contact(id: 3, x: 0.52, y: 0.5)]
-    let corners: Set<Corner> = [.topLeft], enabled: Set<GestureSpec> = [spec]
-    _ = r.process([corner], at: 0, enabledCorners: corners, eligibleTemporalSpecs: enabled)
-    _ = r.process([corner], at: 0.3, enabledCorners: corners, eligibleTemporalSpecs: enabled)
-    _ = r.process([corner] + held, at: 0.31, enabledCorners: corners, eligibleTemporalSpecs: enabled)
+    let enabled: Set<GestureSpec> = [spec]
+    _ = r.process(held, at: 0.31, eligibleTemporalSpecs: enabled)
     for start in [0.51, 0.71] {
-        _ = r.process([corner] + held + [.init(id: 8, x: 0.7, y: 0.5)], at: start, enabledCorners: corners, eligibleTemporalSpecs: enabled)
-        let result = r.process([corner] + held, at: start + 0.06, enabledCorners: corners, eligibleTemporalSpecs: enabled)
+        _ = r.process(held + [.init(id: 8, x: 0.7, y: 0.5)], at: start, eligibleTemporalSpecs: enabled)
+        let result = r.process(held, at: start + 0.06, eligibleTemporalSpecs: enabled)
         #expect(result == (start == 0.71 ? [spec] : []))
     }
-    var configuration = AppConfiguration()
-    configuration.stacks = [.init(name: "Double tip", isEnabled: true, bindings: [.init(gesture: .init(kind: .doubleTipTapRight, fingers: 4), actions: [.init(system: .nextTab)])])]
-    #expect(configuration.validation().errors.isEmpty)
-    let restored = try JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(configuration))
-    #expect(restored.stacks.first?.bindings.first?.gesture.kind == .doubleTipTapRight)
 }
 
 @Test func incompatibleSecondTipPreservesCompletedSingle() {

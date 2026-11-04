@@ -1,4 +1,4 @@
-// OS boundaries only: the monitor, chooser selection, stack keyboard driver and
+// OS boundaries only: the monitor, chooser selection, and
 // activation coordinator below are the same types used by the shipping app.
 import AppKit
 import CoreGraphics
@@ -71,7 +71,7 @@ private final class SnapListener: WindowSnappingMonitoring {
 @main struct WindowSwitcherFlowChecks {
     static var count = 0
     static func check(_ value: @autoclosure () -> Bool, _ text: String) { count += 1; if !value() { fatalError(text) } }
-    static func event(_ monitor: WindowKeyboardMonitor, key: CGKeyCode, down: Bool = true, flags: CGEventFlags = [], modifier: Bool = false, marker: Int64 = StackKeyboardDriver.eventMarker) -> Bool {
+    static func event(_ monitor: WindowKeyboardMonitor, key: CGKeyCode, down: Bool = true, flags: CGEventFlags = [], modifier: Bool = false, marker: Int64 = 0) -> Bool {
         let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down)!
         event.flags = flags; event.setIntegerValueField(.eventSourceUserData, value: marker)
         return monitor.handle(type: modifier ? .flagsChanged : (down ? .keyDown : .keyUp), event: event)
@@ -98,33 +98,33 @@ private final class SnapListener: WindowSnappingMonitoring {
         }
         var settings = WindowSwitcherSettings(); settings.isEnabled = true; settings.showsPreviews = false
         model.configure(settings); catalog.deliver() // initial warm enumeration
-        var optionUps = 0
-        let driver = StackKeyboardDriver(physicalModifiers: []) { key, down, flags, modifier in
-            if modifier && key == 58 && !down { optionUps += 1 }
-            _ = event(monitor, key: key, down: down, flags: flags, modifier: modifier)
+        func tab(flags: CGEventFlags = .maskAlternate) {
+            _ = event(monitor, key: 48, flags: flags)
+            _ = event(monitor, key: 48, down: false, flags: flags)
         }
-        let runtime = GestureStackRuntime(keyboard: driver)
-        let tab = GestureAction(kind: .shortcut, shortcut: .init(keyCode: 48, modifiers: 0, keyLabel: "Tab"))
-        let stack = GestureStack(name: "Switch", device: .trackpad, corner: .topLeft, startActions: [.init(kind: .holdModifiers, modifiers: [.option]), .init(action: tab)])
-        runtime.begin(stack, deviceID: 1, fingerID: 1, time: 0, tuning: .init(), aspect: 1)
-        check(model.isShowing && model.isLoading && suspended && chooserVisible && !snapping.monitorAvailable && !snapListener.listening, "Stack opens real chooser and suspends snapping")
-        runtime.end(); driver.releaseAll()
+        func releaseOption() {
+            _ = event(monitor, key: 58, down: false, modifier: true)
+        }
+
+        tab()
+        check(model.isShowing && model.isLoading && suspended && chooserVisible && !snapping.monitorAvailable && !snapListener.listening, "Option-Tab opens the chooser and suspends snapping")
+        releaseOption()
         check(model.isLoading && catalog.requested.isEmpty, "Early Option release waits for async catalogue")
         catalog.deliver(); check(!model.isShowing && !suspended && !chooserVisible && snapping.monitorAvailable && snapListener.listening, "Loaded release confirms and resumes snapping")
         check(catalog.requested == [second.id], "Chooser activates selected same-app second window")
         catalog.drain(); check(catalog.focused == second.id && catalog.effects.contains("raise"), "Production coordinator raises and verifies selected window")
         check(catalog.completions == 1, "Repeated release confirms exactly once")
-        check(!event(monitor, key: 48, down: false), "Stack key-up clears consumed key ownership")
+        check(!event(monitor, key: 48, down: false), "Tab key-up clears consumed key ownership")
         check(!event(monitor, key: 48, flags: .maskAlternate, marker: ActionExecutor.eventMarker), "Ordinary action marker cannot reopen chooser")
 
         // While held, repeated Tab and Shift-Tab use the monitor's live path.
         catalog.focused = first.id
-        try driver.hold([.option]); try driver.press(.init(keyCode: 48, modifiers: 0, keyLabel: "Tab"))
-        try driver.press(.init(keyCode: 48, modifiers: 0, keyLabel: "Tab"))
+        tab()
+        tab()
         catalog.deliver(); check(model.selectedID == third.id, "Tab while loading accumulates navigation")
-        try driver.press(.init(keyCode: 48, modifiers: KeyboardModifier.shift.flag, keyLabel: "Tab"))
+        tab(flags: [.maskAlternate, .maskShift])
         check(model.selectedID == second.id, "Held Shift-Tab navigates backward through production monitor")
-        driver.releaseAll(); catalog.drain()
+        releaseOption(); catalog.drain()
         check(catalog.requested.last == second.id && !suspended, "Release confirms navigated window and resumes snapping")
 
         // Old enumeration cannot overwrite a cancelled/reopened chooser.
@@ -168,12 +168,11 @@ private final class SnapListener: WindowSnappingMonitoring {
         check(model.show(), "Activation completion releases gate")
         catalog.deliver(); model.cancel()
 
-        // The actual AppModel configuration and stop paths release stack-owned Option.
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("Switcher-flow-\(UUID())")
         defer { try? FileManager.default.removeItem(at: temporary) }
         let trackpad = AppModel(storage: ConfigurationStore(url: temporary.appendingPathComponent("settings.json")),
             nativeInputEnabled: false, observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { true },
-            stackKeyboard: driver, focusedApplication: { ("test.editor", 10, "Editor") })
+            focusedApplication: { ("test.editor", 10, "Editor") })
         // Real dispatch classifies all switcher failures without losing the error result.
         let actionExecutor = ActionExecutor(accessibilityTrusted: { true })
         let windowAction = GestureAction(kind: .system, system: .nextWindow)
@@ -192,33 +191,11 @@ private final class SnapListener: WindowSnappingMonitoring {
               "Window activation failure preserves its error for automation callers")
         trackpad.handleActionFailure(dispatchFailure!)
         check(trackpad.errorMessage == nil, "Ordinary gesture dispatch suppresses window failure modal")
-        var failureOptionUps = 0
-        let failureDriver = StackKeyboardDriver(physicalModifiers: []) { key, down, _, modifier in
-            if modifier && key == 58 && !down { failureOptionUps += 1 }
-        }
-        let failureRuntime = GestureStackRuntime(keyboard: failureDriver)
-        failureRuntime.execute = actionExecutor.execute
-        failureRuntime.onError = trackpad.handleActionFailure
-        let failingStack = GestureStack(name: "Failure", device: .trackpad, corner: .topLeft,
-            startActions: [.init(kind: .holdModifiers, modifiers: [.option]), .init(action: windowAction)])
-        failureRuntime.begin(failingStack, deviceID: 1, fingerID: 1, time: 0, tuning: .init(), aspect: 1)
-        check(failureRuntime.stack == nil && failureOptionUps == 1 && trackpad.errorMessage == nil,
-              "Stack window failure ends stack, releases modifiers, and stays nonmodal")
         trackpad.handleActionFailure(ActionExecutor.ActionError.message("Unrelated failure"))
         check(trackpad.errorMessage == "Unrelated failure", "Unrelated action errors retain existing presentation")
-        trackpad.errorMessage = nil
-        let beforeDisableUps = optionUps, beforeDisableRequests = catalog.requested.count
-        trackpad.stackRuntime.begin(stack, deviceID: 1, fingerID: 1, time: 0, tuning: .init(), aspect: 1)
-        check(model.isLoading && suspended, "AppModel-owned stack opens chooser with held Option")
-        trackpad.configuration.trackpadModuleEnabled = false
-        check(optionUps == beforeDisableUps + 1 && trackpad.stackRuntime.stack == nil, "Disabling Gestures releases owned Option exactly once")
-        catalog.deliver(); catalog.drain()
-        check(catalog.requested.count == beforeDisableRequests + 1 && !suspended, "Gestures disable release confirms chooser exactly once")
-        let beforeStopUps = optionUps, beforeStopRequests = catalog.requested.count, beforeStopEffects = catalog.effects.count
-        trackpad.stackRuntime.begin(stack, deviceID: 1, fingerID: 1, time: 0, tuning: .init(), aspect: 1)
+        let beforeStopRequests = catalog.requested.count, beforeStopEffects = catalog.effects.count
+        tab(); releaseOption()
         trackpad.stop(); model.stop() // Same module stop order as ProductivityModel.stop.
-        trackpad.stop()
-        check(optionUps == beforeStopUps + 1, "Repeated production stop releases owned Option exactly once")
         catalog.deliver(); catalog.drain()
         check(catalog.requested.count == beforeStopRequests && catalog.effects.count == beforeStopEffects && !suspended,
               "Host stop invalidates early release before pending catalogue can activate")
@@ -327,9 +304,8 @@ private final class SnapListener: WindowSnappingMonitoring {
         var hidden = second; hidden.isHidden = true
         metadataService.begin(items: [hidden]); metadataService.setVisible([hidden.id])
         metadataService.updateMetadata([enrichedSecond])
-        staleCapture.loads.removeFirst()(.success([.init(id: 42, processID: second.processID, title: second.captureTitle, frame: frame)]))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
-        check(staleCapture.captures.isEmpty, "Delayed metadata cannot unhide a live hidden window and start capture")
+        check(staleCapture.loads.isEmpty && staleCapture.captures.isEmpty,
+              "Delayed metadata cannot unhide a live hidden window or start native preview work")
         metadataService.end()
         let knownHandles = [(pid: pid_t(10), handle: "known"), (pid: pid_t(20), handle: "terminated"), (pid: pid_t(10), handle: "destroyed")]
         let retained = WindowCatalog.retainedDuringEnumerationFailure(knownHandles, unavailablePIDs: [10, 20, 30], livePIDs: [10, 30],

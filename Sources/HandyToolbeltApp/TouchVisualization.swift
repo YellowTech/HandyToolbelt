@@ -46,7 +46,6 @@ final class TouchVisualization: ObservableObject {
         var next = pending
         next.contacts = smoother.render(at: time)
         if next.contacts.isEmpty {
-            next.modifier = .none; next.modifierFinger = nil
             pressFeedback.update(stage: 0, at: time)
         }
         let nextPress = pressFeedback.display(at: time)

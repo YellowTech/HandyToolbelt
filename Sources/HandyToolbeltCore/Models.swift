@@ -69,48 +69,24 @@ public enum GestureKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public enum Corner: String, Codable, CaseIterable, Identifiable, Sendable {
-    case none, topLeft, topRight, bottomLeft, bottomRight
-    public var id: String { rawValue }
-    public var title: String {
-        switch self {
-        case .none: return "No modifier"
-        case .topLeft: return "Hold top-left corner"
-        case .topRight: return "Hold top-right corner"
-        case .bottomLeft: return "Hold bottom-left corner"
-        case .bottomRight: return "Hold bottom-right corner"
-        }
-    }
-    public func contains(_ point: TouchPoint, size: Double = 0.22) -> Bool {
-        switch self {
-        case .none: return false
-        case .topLeft: return point.x < size && point.y > 1 - size
-        case .topRight: return point.x > 1 - size && point.y > 1 - size
-        case .bottomLeft: return point.x < size && point.y < size
-        case .bottomRight: return point.x > 1 - size && point.y < size
-        }
-    }
-}
-
 public struct GestureSpec: Codable, Hashable, Sendable {
     public var kind: GestureKind
     public var fingers: Int
-    public var corner: Corner
-    public init(kind: GestureKind, fingers: Int? = nil, corner: Corner = .none) {
-        self.kind = kind; self.fingers = fingers ?? kind.defaultFingerCount; self.corner = corner
+    public init(kind: GestureKind, fingers: Int? = nil) {
+        self.kind = kind; self.fingers = fingers ?? kind.defaultFingerCount
     }
     public var title: String { kind.isTipTap && fingers == 2 ? kind.title : "\(fingers)-finger \(kind.title.lowercased())" }
     public var heldFingerCount: Int { kind.isAnchored ? fingers - 1 : 0 }
-    public var totalFingerCount: Int { fingers + (corner == .none ? 0 : 1) }
-    public func allowedFingerCounts(isStackChild: Bool = false) -> [Int] {
-        if kind == .forceClick { return Array(1...(corner != .none || isStackChild ? 4 : 5)) }
+    public var totalFingerCount: Int { fingers }
+    public func allowedFingerCounts() -> [Int] {
+        if kind == .forceClick { return Array(1...5) }
         if kind == .tipTapMiddle || kind == .doubleTipTapMiddle { return [3] }
         if kind.isAnchored { return Array(2...4) }
-        return Array((corner != .none || isStackChild ? 1 : 2)...(corner != .none || isStackChild ? 4 : 5))
+        return Array(2...5)
     }
-    public func normalized(isStackChild: Bool = false) -> GestureSpec {
+    public func normalized() -> GestureSpec {
         var result = self
-        result.fingers = allowedFingerCounts(isStackChild: isStackChild).min { abs(Double($0) - Double(fingers)) < abs(Double($1) - Double(fingers)) }!
+        result.fingers = allowedFingerCounts().min { abs(Double($0) - Double(fingers)) < abs(Double($1) - Double(fingers)) }!
         return result
     }
 }
@@ -275,6 +251,7 @@ public struct GestureBinding: Codable, Identifiable, Equatable, Sendable {
         self.applicationGroupID = applicationGroupID
     }
     private enum CodingKeys: String, CodingKey { case id, name, device, gesture, action, isEnabled, applicationGroupID, hapticPattern, keyboardModifiers, showsToast }
+    private enum LegacyGestureKey: String, CodingKey { case corner }
     public init(from decoder: Decoder) throws {
         let v = try decoder.container(keyedBy: CodingKeys.self)
         name = try v.decodeIfPresent(String.self, forKey: .name) ?? ""
@@ -283,6 +260,12 @@ public struct GestureBinding: Codable, Identifiable, Equatable, Sendable {
         gesture = try v.decode(GestureSpec.self, forKey: .gesture)
         action = try v.decode(GestureAction.self, forKey: .action)
         isEnabled = try v.decode(Bool.self, forKey: .isEnabled)
+        let legacyGesture = try v.nestedContainer(keyedBy: LegacyGestureKey.self, forKey: .gesture)
+        if let legacyCorner = try legacyGesture.decodeIfPresent(String.self, forKey: .corner), legacyCorner != "none" {
+            // A removed modifier must never activate its action on an ordinary gesture.
+            gesture = gesture.normalized()
+            isEnabled = false
+        }
         applicationGroupID = try v.decodeIfPresent(UUID.self, forKey: .applicationGroupID)
         hapticPattern = try v.decodeIfPresent(HapticPattern.self, forKey: .hapticPattern)
         showsToast = try v.decodeIfPresent(Bool.self, forKey: .showsToast) ?? true
@@ -302,8 +285,7 @@ public struct AppConfiguration: Codable, Sendable {
     public var powerModuleEnabled = false
     public var coffeeModuleEnabled = false
     public var snappingModuleEnabled = false
-    public var stacks: [GestureStack] = []
-    public var version = 6
+    public var version = 7
     public var bindings: [GestureBinding] = GestureBinding.starterBindings
     public var trackpadTuning = GestureTuning()
     public var mouseTuning = GestureTuning()
@@ -314,15 +296,14 @@ public struct AppConfiguration: Codable, Sendable {
     public var hapticsInPractice = true
     public var visualFeedbackEnabled = false
     public init() {}
-    private enum CodingKeys: String, CodingKey { case snappingModuleEnabled, stacks, automations, powerModuleEnabled, coffeeModuleEnabled, displayModuleEnabled, version, bindings, isEnabled, trackpadTuning, mouseTuning, applicationGroups, trackpadModuleEnabled, pauseAll, windowSwitcher, hapticPattern, hapticsInPractice, visualFeedbackEnabled }
+    private enum CodingKeys: String, CodingKey { case snappingModuleEnabled, automations, powerModuleEnabled, coffeeModuleEnabled, displayModuleEnabled, version, bindings, isEnabled, trackpadTuning, mouseTuning, applicationGroups, trackpadModuleEnabled, pauseAll, windowSwitcher, hapticPattern, hapticsInPractice, visualFeedbackEnabled }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let storedVersion = try values.decode(Int.self, forKey: .version)
-        guard (1...6).contains(storedVersion) else {
+        guard (1...7).contains(storedVersion) else {
             throw DecodingError.dataCorruptedError(forKey: .version, in: values, debugDescription: "Unsupported settings version.")
         }
-        version = 6
-        stacks = try values.decodeIfPresent([GestureStack].self, forKey: .stacks) ?? []
+        version = 7
         automations = try values.decodeIfPresent([SavedAutomation].self, forKey: .automations) ?? []
         powerModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .powerModuleEnabled) ?? (storedVersion < 6)
         coffeeModuleEnabled = try values.decodeIfPresent(Bool.self, forKey: .coffeeModuleEnabled) ?? (storedVersion < 6)
@@ -351,7 +332,6 @@ public struct AppConfiguration: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(snappingModuleEnabled, forKey: .snappingModuleEnabled)
-        try values.encode(stacks, forKey: .stacks)
         try values.encode(automations, forKey: .automations)
         try values.encode(powerModuleEnabled, forKey: .powerModuleEnabled)
         try values.encode(coffeeModuleEnabled, forKey: .coffeeModuleEnabled)
@@ -380,7 +360,6 @@ public struct AppConfiguration: Codable, Sendable {
         return applicationGroups.first { $0.id == id }?.contains(bundleIdentifier) ?? false
     }
     public func match(device: InputDevice, gesture: GestureSpec, frontmostBundleIdentifier: String? = nil, keyboardModifiers: Set<KeyboardModifier> = []) -> GestureBinding? {
-        if gesture.corner != .none && stacks.contains(where: { $0.isEnabled && $0.device == device && $0.corner == gesture.corner && $0.keyboardModifiers.matches(keyboardModifiers) && applies($0, to: frontmostBundleIdentifier) }) { return nil }
         let candidates = bindings.filter { $0.isEnabled && $0.device == device && $0.gesture == gesture && $0.keyboardModifiers.matches(keyboardModifiers) && applies($0, to: frontmostBundleIdentifier) }
         let scoped = candidates.filter { $0.applicationGroupID != nil }
         let matches = scoped.isEmpty ? candidates : scoped
@@ -395,4 +374,20 @@ public struct AppConfiguration: Codable, Sendable {
         }.map(\.name).sorted()
     }
     public func hasConflict(_ binding: GestureBinding) -> Bool { !conflictMessages(for: binding).isEmpty }
+}
+
+public extension AppConfiguration {
+    func scopesOverlap(_ first: UUID?, _ second: UUID?) -> Bool {
+        guard let first, let second else { return true }
+        guard let a = applicationGroups.first(where: { $0.id == first }), let b = applicationGroups.first(where: { $0.id == second }) else { return false }
+        return a.applications.contains { b.contains($0.bundleIdentifier) }
+    }
+    func conflictMessages(for binding: GestureBinding) -> [String] {
+        guard binding.isEnabled else { return [] }
+        var messages: [String] = []
+        if bindings.contains(where: { other in
+            other.id != binding.id && other.isEnabled && other.device == binding.device && other.gesture == binding.gesture && other.keyboardModifiers.overlaps(binding.keyboardModifiers) && ((other.applicationGroupID == nil && binding.applicationGroupID == nil) || (other.applicationGroupID != nil && binding.applicationGroupID != nil && scopesOverlap(other.applicationGroupID, binding.applicationGroupID)))
+        }) { messages.append("Overlaps an enabled binding for the same gesture and scope.") }
+        return messages
+    }
 }

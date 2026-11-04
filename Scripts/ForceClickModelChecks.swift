@@ -15,9 +15,9 @@ import HandyToolbeltCore
         defer { try? FileManager.default.removeItem(at: directory) }
         var focus = "com.example.Editor"
         var access = true
-        let keyboard = StackKeyboardDriver(physicalModifiers: [], emit: { _, _, _, _ in })
+        let keyboard = GestureKeyboardMonitor()
         let model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("config.json")), nativeInputEnabled: false,
-            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, stackKeyboard: keyboard,
+            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, keyboardMonitor: keyboard,
             focusedApplication: { (focus, 100, "Test") })
         var output: [String] = []
         model.onShowText = { output.append($0.text) }
@@ -50,6 +50,16 @@ import HandyToolbeltCore
         model.pressureChanged(stage: 1, at: time + 0.075)
         model.pressureChanged(stage: 2, at: time + 0.08)
         release(); check(output == ["force"], "Stage2 without stage1 fires once and excludes ordinary click")
+        output = []
+        let rim = Contact(id: 91, x: 0.02, y: 0.5)
+        begin(points + [rim]); _ = model.physicalClick(at: time + 0.06)
+        model.receive(device, points + [Contact(id: rim.id, x: 0.8, y: 0.5)], time + 0.07)
+        model.pressureChanged(stage: 2, at: time + 0.08)
+        release(); check(output == ["force"], "Native validation uses the same admitted contacts as the click snapshot")
+        output = []; begin(); _ = model.physicalClick(at: time + 0.06)
+        model.receive(device, points + [rim, rim], time + 0.07)
+        model.pressureChanged(stage: 2, at: time + 0.08)
+        release(); check(output.isEmpty, "Filtering cannot hide duplicate IDs in a malformed native press frame")
         output = []; begin(); _ = model.physicalClick(at: time + 0.06)
         model.receive(device, [], time + 0.08)
         release(); check(output == ["normal"], "Touch lift before native up retains normal classification")
@@ -70,8 +80,8 @@ import HandyToolbeltCore
         release(); output = []
         begin(); _ = model.physicalClick(at: time + 0.06)
         model.pressureChanged(stage: 2, at: time + 0.08)
-        _ = keyboard.physicalTransition(key: 55, flags: .maskCommand)
-        _ = keyboard.physicalTransition(key: 55, flags: [])
+        keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: .maskCommand, marker: 0)
+        keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: [], marker: 0)
         drain(); release()
         check(output.isEmpty, "Modifier change-and-back cancels a queued native Force click action")
         for reason in ["config", "focus", "modifiers", "permission", "session", "replacement", "ambiguous", "stale"] {
@@ -80,7 +90,7 @@ import HandyToolbeltCore
             switch reason {
             case "config": model.configuration.hapticsInPractice.toggle()
             case "focus": focus = "com.example.Other"; _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 101)
-            case "modifiers": _ = keyboard.physicalTransition(key: 55, flags: .maskCommand)
+            case "modifiers": keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: .maskCommand, marker: 0)
             case "permission": access = false; model.refreshPermissions()
             case "session": model.handleInputSessionEvent(.lock)
             case "replacement": model.receive(device, [.init(id: 99, x: 0.5, y: 0.5)], time + 0.07)
@@ -90,7 +100,7 @@ import HandyToolbeltCore
             model.pressureChanged(stage: 2, at: time + 0.08); release()
             check(output.isEmpty, "\(reason) invalidates pending force and fallback")
             if reason == "session" { model.handleInputSessionEvent(.unlock); model.receive(device, [], time + 0.2) }
-            _ = keyboard.physicalTransition(key: 55, flags: [])
+            keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: [], marker: 0)
             focus = "com.example.Editor"; _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
         }
         model.configuration.bindings = [normal, force]; access = true; model.refreshPermissions()
@@ -103,23 +113,6 @@ import HandyToolbeltCore
             check(!model.physicalClick(at: time + 0.06), "\(fingers)-finger Force click preserves native down")
             model.pressureChanged(stage: 2, at: time + 0.08); release()
             check(output == ["force\(fingers)"], "\(fingers)-finger Force click routes from captured native membership")
-            output = []
-        }
-        let corner = Contact(id: 10, x: 0.05, y: 0.95)
-        let free = Contact(id: 11, x: 0.5, y: 0.5)
-        model.configuration.bindings = [GestureBinding(gesture: .init(kind: .forceClick, fingers: 1, corner: .topLeft), action: .init(kind: .showText, text: "corner"))]
-        for cornerChange in ["none", "lift", "move"] {
-            time += 1
-            model.receive(device, [], time)
-            for offset in [0.01, 0.14, 0.28] { model.receive(device, [corner], time + offset) }
-            model.receive(device, [corner, free], time + 0.30)
-            model.receive(device, [corner, free], time + 0.34)
-            check(!model.physicalClick(at: time + 0.35), "Corner Force click keeps native down")
-            if cornerChange == "lift" { model.receive(device, [free], time + 0.355) }
-            if cornerChange == "move" { model.receive(device, [.init(id: 10, x: 0.12, y: 0.95), free], time + 0.355) }
-            model.pressureChanged(stage: 2, at: time + 0.36)
-            model.physicalRelease(button: 0, at: time + 0.37); model.finishNativePresses(at: time + 0.42); drain()
-            check(output == (cornerChange == "none" ? ["corner"] : []), "Corner identity is required while free contacts remain")
             output = []
         }
         let oldTrackpad = TouchDevice(id: 4, kind: .trackpad, name: "Non-Force trackpad", aspectRatio: 1.6, hasMeasuredAspect: true, supportsForce: false)

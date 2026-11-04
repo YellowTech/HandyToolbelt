@@ -60,7 +60,7 @@ struct GestureGlyph: View {
     private let compact: Bool
 
     init(gesture: GestureSpec, handAngle: Double = 0, progress: Double = 0.45, compact: Bool = true) {
-        // Disabled stack drafts may contain invalid counts; never render an unbounded range.
+        // Bound the number of fingers shown for an invalid draft.
         self.gesture = gesture.normalized()
         self.handAngle = handAngle
         self.progress = progress
@@ -81,7 +81,6 @@ struct GestureGlyph: View {
             let outline = Path(roundedRect: CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1), cornerRadius: compact ? 4 : 10)
             context.fill(outline, with: .color(Theme.field))
             context.stroke(outline, with: .color(Theme.separator), lineWidth: 1)
-            drawCorner(in: context, size: size)
             for index in 0..<gesture.fingers {
                 let held = gesture.kind.isAnchored && index != activeIndex
                 // Anchors remain down for repeated actions; acting fingers lift.
@@ -92,14 +91,6 @@ struct GestureGlyph: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(gesture.title), \(gesture.totalFingerCount) \(gesture.totalFingerCount == 1 ? "finger" : "fingers") total. Hollow circles rest; filled circles act.")
-    }
-
-    private func drawCorner(in context: GraphicsContext, size: CGSize) {
-        guard gesture.corner != .none else { return }
-        let left = gesture.corner == .topLeft || gesture.corner == .bottomLeft
-        let top = gesture.corner == .topLeft || gesture.corner == .topRight
-        let point = CGPoint(x: size.width * (left ? 0.10 : 0.90), y: size.height * (top ? 0.14 : 0.86))
-        drawDot(at: point, held: true, color: .orange, label: "corner", labelOffset: top ? 22 : -18, in: context)
     }
 
     private func drawFinger(index: Int, held: Bool, in context: GraphicsContext, size: CGSize) {
@@ -159,7 +150,6 @@ struct GestureGlyph: View {
 
 extension GestureSpec {
     var teachingInstruction: String {
-        let prefix = corner == .none ? "" : "\(corner.title) with one extra finger. "
         let action: String
         if kind.isAnchored {
             let resting = fingers - 1
@@ -180,7 +170,7 @@ extension GestureSpec {
         } else {
             action = "Move \(fingers) fingers together \(kind.teachingDirectionName), then lift."
         }
-        return prefix + action
+        return action
     }
 
     private var teachingPlacement: String {
@@ -270,13 +260,12 @@ private struct IllustrationAttachment: NSViewRepresentable {
 
 struct GestureFingerPicker: View {
     @Binding var gesture: GestureSpec
-    var isStackChild = false
     var body: some View {
         if gesture.kind == .tipTapMiddle || gesture.kind == .doubleTipTapMiddle {
             Text("2 resting + 1 tapping finger").font(.caption).foregroundStyle(Theme.secondary)
         } else {
             Picker(gesture.kind.isAnchored ? "Resting fingers" : "Fingers", selection: $gesture.fingers) {
-                ForEach(gesture.allowedFingerCounts(isStackChild: isStackChild), id: \.self) { count in
+                ForEach(gesture.allowedFingerCounts(), id: \.self) { count in
                     Text("\(gesture.kind.isAnchored ? count - 1 : count)").tag(count)
                 }
             }.frame(maxWidth: 230)

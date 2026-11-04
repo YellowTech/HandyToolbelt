@@ -5,17 +5,6 @@ import HandyToolbeltCore
 @testable import HandyToolbeltCLI
 
 final class ContractTests: XCTestCase {
-    func testOptionalStackChildNameContract() throws {
-        let child = GestureStackBinding(name: "Tabs", actions: [.init(kind: .showText, text: "Tab")])
-        let schema = ControlContract.definitions["GestureStackBinding"]!
-        var value = try JSONValue(encoding: child).objectValue!
-        XCTAssertEqual(JSONShapeValidation.errors(.object(value), schema: schema, root: ControlContract.value), [])
-        value.removeValue(forKey: "name")
-        XCTAssertEqual(JSONShapeValidation.errors(.object(value), schema: schema, root: ControlContract.value), [])
-        XCTAssertEqual(try JSONValue.object(value).decode(GestureStackBinding.self).name, "")
-        value["name"] = .string(String(repeating: "a", count: ConfigurationLimits.maximumNameLength + 1))
-        XCTAssertFalse(JSONShapeValidation.errors(.object(value), schema: schema, root: ControlContract.value).isEmpty)
-    }
     func testSwitcherDiagnosticsContract() {
         let schema = ControlContract.definitions["SwitcherStatus"]!
         var status: JSONObject = ["showing": .bool(false), "loading": .bool(false),
@@ -192,11 +181,11 @@ final class ContractTests: XCTestCase {
         let version5: JSONValue = .object(["version": .number(5), "bindings": .array([]), "coffeeModuleEnabled": .bool(false)])
         XCTAssertEqual(JSONShapeValidation.errors(version5, schema: ControlContract.definitions["Version5AppConfiguration"]!, root: root), [])
         let migrated5 = try version5.decode(AppConfiguration.self)
-        XCTAssertEqual(migrated5.version, 6)
+        XCTAssertEqual(migrated5.version, 7)
         XCTAssertTrue(migrated5.powerModuleEnabled)
         XCTAssertFalse(migrated5.coffeeModuleEnabled)
         let current = ControlContract.definitions["AppConfiguration"]!
-        let minimal: JSONValue = .object(["version": .number(6), "bindings": .array([])])
+        let minimal: JSONValue = .object(["version": .number(7), "bindings": .array([])])
         XCTAssertEqual(JSONShapeValidation.errors(minimal, schema: current, root: root), [])
         for obsolete in ["isEnabled", "pauseAll", "unknownSetting"] {
             var invalid = minimal.objectValue!; invalid[obsolete] = .bool(true)
@@ -220,17 +209,24 @@ final class ContractTests: XCTestCase {
             XCTAssertEqual(exported["maximum"], .number(bounds.upperBound))
         }
     }
-    func testStackContractRejectsUnknownAndHoldOutsideStart() throws {
+    func testCurrentConfigurationRejectsRemovedGestureFields() throws {
         let root = ControlContract.value
-        var config = AppConfiguration(); config.bindings = []; config.stacks = [.init()]
+        let current = ControlContract.definitions["AppConfiguration"]!
+        let binding = GestureBinding(gesture: .init(kind: .tap, fingers: 2), action: .init(system: .middleClick))
+        var config = AppConfiguration()
+        config.bindings = [binding]
         let raw = try JSONValue(encoding: config)
-        XCTAssertEqual(JSONShapeValidation.errors(raw, schema: ControlContract.definitions["AppConfiguration"]!, root: root), [])
-        let hold = try JSONValue(encoding: GestureStackAction(kind: .holdModifiers))
-        XCTAssertFalse(JSONShapeValidation.errors(hold, schema: ControlContract.definitions["Action"]!, root: root).isEmpty)
-        var unknown = raw.objectValue!; unknown["nestedStacks"] = .array([])
-        XCTAssertFalse(JSONShapeValidation.errors(.object(unknown), schema: ControlContract.definitions["AppConfiguration"]!, root: root).isEmpty)
-        let legacy: JSONValue = .object(["version": .number(4), "bindings": .array([])])
-        XCTAssertEqual(JSONShapeValidation.errors(legacy, schema: ControlContract.definitions["Version4AppConfiguration"]!, root: root), [])
+        XCTAssertEqual(JSONShapeValidation.errors(raw, schema: current, root: root), [])
+
+        var invalid = raw.objectValue!
+        invalid["stacks"] = .array([])
+        XCTAssertFalse(JSONShapeValidation.errors(.object(invalid), schema: current, root: root).isEmpty)
+        invalid.removeValue(forKey: "stacks")
+
+        var oldBinding = try JSONValue(encoding: binding).objectValue!
+        oldBinding["gesture"] = .object(["kind": .string("tap"), "fingers": .number(2), "corner": .string("topLeft")])
+        invalid["bindings"] = .array([.object(oldBinding)])
+        XCTAssertFalse(JSONShapeValidation.errors(.object(invalid), schema: current, root: root).isEmpty)
     }
 
 }

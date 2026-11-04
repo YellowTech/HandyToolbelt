@@ -19,7 +19,7 @@ struct SettingsTransferView: View {
             Text("Save a JSON file to iCloud Drive or any folder, then import it on another Mac. The file includes actions and AppleScript.")
                 .font(.callout).foregroundStyle(Theme.secondary)
             HeaderDisclosureGroup("What is included?") {
-                Text("Includes saved tool preferences, mappings, stacks, app groups, and automations. Excludes Allow CLI control, macOS permissions, Start at login registration, active Coffee selections, and Gesture Gym trials.")
+                Text("Includes saved tool preferences, mappings, app groups, and automations. Excludes Allow CLI control, macOS permissions, Start at login registration, active Coffee selections, and Gesture Gym trials.")
                     .font(.callout).foregroundStyle(Theme.secondary)
             }
             if trackpad.settingsNeedRecovery {
@@ -46,9 +46,7 @@ private struct SettingsImportReviewView: View {
     let review: SettingsImportReview
     private var config: AppConfiguration { review.configuration }
     private var actions: [GestureAction] {
-        config.bindings.map(\.action) + config.stacks.flatMap { stack in
-            stack.startActions.filter { $0.kind == .action }.map(\.action) + stack.bindings.flatMap(\.actions) + stack.releaseActions
-        } + config.automations.flatMap { $0.steps.compactMap(\.action) }
+        config.bindings.map(\.action) + config.automations.flatMap { $0.steps.compactMap(\.action) }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -56,7 +54,7 @@ private struct SettingsImportReviewView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Replace Settings?").font(.title2.weight(.semibold))
                     Text(review.filename).font(.headline).textSelection(.enabled)
-                    Text([count(config.bindings.count, "mapping"), count(config.stacks.count, "stack"),
+                    Text([count(config.bindings.count, "mapping"),
                           count(config.applicationGroups.count, "app group"), count(config.automations.count, "automation")].joined(separator: " · "))
                     VStack(alignment: .leading, spacing: 5) {
                         tool("Gestures", config.trackpadModuleEnabled)

@@ -49,33 +49,23 @@ public struct NativePressArbiter<Payload> {
 }
 
 /// Contact lifts may precede native mouse-up. Subsets preserve the captured
-/// press; additions, replacement IDs, corner movement, or stale data cancel it.
+/// press; additions, replacement IDs, or stale data cancel it.
 public struct NativePressContacts {
     public let deviceID: UInt64
     public let ids: Set<Int>
     private var remainingIDs: Set<Int>
     public private(set) var lastFrame: Double
-    public let corner: Corner
-    public let cornerFinger: Int?
-    public let cornerSize: Double
-    private let cornerOrigin: TouchPoint?
-    private let movementTolerance: Double
-    public init(deviceID: UInt64, contacts: [Contact], corner: Corner, cornerFinger: Int?, cornerSize: Double, time: Double, movementTolerance: Double = 0.035) {
-        self.deviceID = deviceID; ids = Set(contacts.map(\.id)); self.corner = corner
-        self.cornerFinger = cornerFinger; self.cornerSize = cornerSize
-        remainingIDs = ids; lastFrame = time
-        cornerOrigin = contacts.first(where: { $0.id == cornerFinger })?.position
-        self.movementTolerance = movementTolerance
+    public init(deviceID: UInt64, contacts: [Contact], time: Double) {
+        self.deviceID = deviceID
+        ids = Set(contacts.map(\.id))
+        remainingIDs = ids
+        lastFrame = time
     }
     public mutating func accepts(deviceID: UInt64, contacts: [Contact], at time: Double) -> Bool {
         if self.deviceID != deviceID { return contacts.isEmpty }
         guard time.isFinite, time >= lastFrame, time - lastFrame < 0.15, contacts.count == Set(contacts.map(\.id)).count, Set(contacts.map(\.id)).isSubset(of: remainingIDs),
               contacts.allSatisfy({ $0.position.x.isFinite && $0.position.y.isFinite && (0...1).contains($0.position.x) && (0...1).contains($0.position.y) }) else { return false }
-        if let cornerFinger, !contacts.isEmpty, !contacts.contains(where: { $0.id == cornerFinger }) { return false }
         remainingIDs = Set(contacts.map(\.id)); lastFrame = time
-        if let cornerFinger, let point = contacts.first(where: { $0.id == cornerFinger }) {
-            return corner.contains(point.position, size: cornerSize) && cornerOrigin.map { hypot(point.position.x - $0.x, point.position.y - $0.y) <= movementTolerance } == true
-        }
         return true
     }
 }

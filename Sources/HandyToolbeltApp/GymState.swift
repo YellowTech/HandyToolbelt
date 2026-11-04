@@ -6,8 +6,6 @@ struct GymSnapshot: Equatable {
     var contacts: [Contact] = []
     var trails: [Int: [TouchPoint]] = [:]
     var feedback = DetectionFeedback()
-    var modifier: Corner = .none
-    var modifierFinger: Int?
     var aspectRatio: Double = 1.6
     var measuredAspect = false
     var deviceName = "Waiting for touches"

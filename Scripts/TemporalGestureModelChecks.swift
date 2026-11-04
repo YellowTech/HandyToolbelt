@@ -16,14 +16,13 @@ import HandyToolbeltCore
         defer { try? FileManager.default.removeItem(at: directory) }
         var focus: String? = "com.example.Editor"
         var access = true
-        let keyboard = StackKeyboardDriver(physicalModifiers: [], emit: { _, _, _, _ in })
+        let keyboard = GestureKeyboardMonitor()
         var model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("config.json")), nativeInputEnabled: false,
-            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, stackKeyboard: keyboard,
+            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, keyboardMonitor: keyboard,
             focusedApplication: { (focus, 100, "Test") })
         var output: [String] = []
         model.onShowText = { output.append($0.text) }
         model.configuration.trackpadModuleEnabled = true
-        model.configuration.stacks = []
         model.start(); defer { model.stop() }
         let device = TouchDevice(id: 1, kind: .trackpad, name: "Non-Force", aspectRatio: 1.6, hasMeasuredAspect: true, supportsForce: false)
         let other = TouchDevice(id: 2, kind: .trackpad, name: "Other", aspectRatio: 1.6, hasMeasuredAspect: true, supportsForce: true)
@@ -75,8 +74,8 @@ import HandyToolbeltCore
                 focus = "com.example.Other"; _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
                 focus = "com.example.Editor"; _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
             case "modifiers":
-                _ = keyboard.physicalTransition(key: 55, flags: .maskCommand)
-                _ = keyboard.physicalTransition(key: 55, flags: [])
+                keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: .maskCommand, marker: 0)
+                keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: [], marker: 0)
             case "permission": access = false; model.refreshPermissions()
             case "session": model.handleInputSessionEvent(.lock); model.handleInputSessionEvent(.unlock)
             case "disconnect": model.devices = [other]; model.devices = [device, other]
@@ -93,8 +92,8 @@ import HandyToolbeltCore
         for reason in ["modifiers", "config", "focus"] {
             fresh(); oneTap(); model.finishTemporalGestures(for: device.id, at: time + 0.5)
             if reason == "modifiers" {
-                _ = keyboard.physicalTransition(key: 55, flags: .maskCommand)
-                _ = keyboard.physicalTransition(key: 55, flags: [])
+                keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: .maskCommand, marker: 0)
+                keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: [], marker: 0)
             } else if reason == "config" { model.configuration.hapticsInPractice.toggle() }
             else {
                 focus = "com.example.Other"; _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
@@ -109,8 +108,8 @@ import HandyToolbeltCore
         lift(0.86); drain(); expire()
         check(output == ["hold"], "Long touch fires once and suppresses later click/release tap")
         fresh(); touch(0.01); touch(0.30)
-        _ = keyboard.physicalTransition(key: 55, flags: .maskCommand)
-        _ = keyboard.physicalTransition(key: 55, flags: [])
+        keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: .maskCommand, marker: 0)
+        keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: [], marker: 0)
         touch(0.60); lift(0.65); drain(); expire()
         check(output.isEmpty, "Changed-back modifiers cannot reinterpret an already-held chord")
 
@@ -166,13 +165,66 @@ import HandyToolbeltCore
         fresh(); oneTip(); drain()
         check(output == ["tip"], "Single tip-tap stays immediate without an enabled matching double")
 
+        let rim = Contact(id: 91, x: 0.02, y: 0.5)
+        let movedRim = Contact(id: rim.id, x: 0.85, y: 0.5)
+        fresh()
+        touch(0.01, contacts: [rim])
+        touch(0.03, contacts: resting + [movedRim])
+        touch(0.23, contacts: tapping + [movedRim])
+        touch(0.29, contacts: resting + [movedRim]); drain()
+        check(output == ["tip"], "A rim-start palm stays excluded from tip-tap after sliding inward")
+
+        model.configuration.bindings = [tap]
+        fresh()
+        touch(0.01, contacts: points + [rim])
+        touch(0.04, contacts: points + [movedRim])
+        touch(0.07, contacts: [movedRim]); drain()
+        check(output == ["tap"], "Eligible fingers can complete a tap while a rim palm stays down")
+        lift(0.10)
+        let reusedID = Array(points.prefix(2)) + [Contact(id: rim.id, x: 0.062, y: 0.5)]
+        touch(0.13, contacts: reusedID)
+        touch(0.16, contacts: Array(points.prefix(2)) + [Contact(id: rim.id, x: 0.058, y: 0.5)])
+        lift(0.19); drain()
+        check(output == ["tap", "tap"], "An ID reused after lifting is admitted at its new interior start and stays admitted at the rim")
+
+        do {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.identifier = NSUserInterfaceItemIdentifier("main")
+            window.orderFront(nil)
+            defer { window.close() }
+            model.selectWorkspace(.gym)
+            focus = Bundle.main.bundleIdentifier
+            _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
+            model.gymTuning.tipEdgeDeadzone = 0.1
+            model.startCalibration()
+            let draftRim = Contact(id: rim.id, x: 0.08, y: 0.5)
+            let anchor = points[1]
+            fresh()
+            touch(0.01, contacts: [draftRim])
+            touch(0.03, contacts: [anchor, movedRim])
+            check(model.gymSnapshot.contacts.map(\.id) == [anchor.id], "Gym uses its draft deadzone for the live contact readout")
+            model.gymTuning.tipEdgeDeadzone = 0
+            touch(0.23, contacts: [anchor, movedRim, Contact(id: 9, x: 0.32, y: 0.5)])
+            touch(0.32, contacts: [anchor, movedRim])
+            check(model.calibrationSamples.count == 1, "Gym calibration excludes the ignored rim touch even after a tuning change")
+            model.stopCalibration()
+            lift(0.35)
+            touch(0.40, contacts: [draftRim])
+            check(model.gymSnapshot.contacts.map(\.id) == [rim.id], "A zero draft deadzone admits newly placed rim contacts")
+            model.selectWorkspace(.mappings)
+            focus = "com.example.Editor"
+            _ = model.updateFocusedApplication(bundleIdentifier: focus, processIdentifier: 100)
+        }
+
         model.configuration.bindings = [tipSingle, tipDouble]
         // The virtual scenarios advanced timestamps into the future. Use a fresh
         // input session for real-clock deadlines instead of rewinding its clock.
         let scheduledConfiguration = model.configuration
         model.stop()
         model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("scheduled-config.json")), nativeInputEnabled: false,
-            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, stackKeyboard: keyboard,
+            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { access }, keyboardMonitor: keyboard,
             focusedApplication: { (focus, 100, "Test") })
         model.configuration = scheduledConfiguration
         model.onShowText = { output.append($0.text) }

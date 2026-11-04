@@ -27,7 +27,7 @@ struct PermissionAccessSection<Content: View>: View {
     let explanation: String
     @ObservedObject var host: ProductivityModel
     let openSettings: () -> Void
-    var testPreview: (() -> Void)? = nil
+    let openSetup: () -> Void
     @ViewBuilder let content: () -> Content
     @State private var didCheck = false
 
@@ -49,12 +49,16 @@ struct PermissionAccessSection<Content: View>: View {
             Text(explanation)
                 .font(.callout).foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Button(action: openSetup) {
+                Text("Open Setup…").font(.body.weight(.semibold)).frame(minWidth: 104)
+            }
+            .buttonStyle(GraphiteButtonStyle(prominent: true))
+            .accessibilityLabel("Open \(title) Setup")
             HStack(spacing: 10) {
                 Button("Open System Settings…", action: openSettings)
                 Button("Check Again") { host.refreshPermissions(); didCheck = true }
                 Button(host.isRestarting ? "Restarting…" : "Restart HandyToolbelt", action: host.restart)
                     .disabled(host.isRestarting)
-                if let testPreview { Button("Open Setup…", action: testPreview) }
             }
             if didCheck {
                 Label(fulfilled ? "macOS reports access enabled for this running app." : "macOS reports no access for this running app. Enable access in System Settings, then restart if needed.",
@@ -78,7 +82,7 @@ struct ScreenRecordingAccessView: View {
             explanation: "Allow HandyToolbelt in System Settings → Privacy & Security → Screen & System Audio Recording for window previews. Open Setup explains the separate direct-capture confirmation before testing one image. Previews never capture audio; macOS may ask again later.",
             host: host,
             openSettings: model.openPreviewSettings,
-            testPreview: model.openPreviewSetup
+            openSetup: host.openPreviewSetup
         ) {
             if !model.previews.hasAcknowledgedNotice {
                 Text("Preview setup is required before the chooser captures images. App icons remain available.")

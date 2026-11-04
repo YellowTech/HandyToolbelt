@@ -16,7 +16,14 @@ enum ConfigurationDocumentDecoder {
         do {
             let schema = try ControlSchema.value()
             let version = value.objectValue?["version"]
-            let definition = version == .number(6) ? "AppConfiguration" : (version == .number(5) ? "Version5AppConfiguration" : (version == .number(4) ? "Version4AppConfiguration" : "LegacyAppConfiguration"))
+            let definition: String
+            switch version {
+            case .number(7): definition = "AppConfiguration"
+            case .number(6): definition = "Version6AppConfiguration"
+            case .number(5): definition = "Version5AppConfiguration"
+            case .number(4): definition = "Version4AppConfiguration"
+            default: definition = "LegacyAppConfiguration"
+            }
             let errors = JSONShapeValidation.errors(value, schema: schema.objectValue?["$defs"]?.objectValue?[definition] ?? .null, root: schema)
             guard errors.isEmpty else { throw failure(errors.joined(separator: " ")) }
             return try value.decode(AppConfiguration.self)

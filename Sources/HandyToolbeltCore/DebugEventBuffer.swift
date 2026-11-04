@@ -1,6 +1,6 @@
 import Foundation
 
-public enum DebugEventCategory: String, Codable { case touch, keyboard, recognition, suppression, click, stack, snapping }
+public enum DebugEventCategory: String, Codable { case touch, keyboard, recognition, suppression, click, snapping }
 public struct DebugEvent: Codable {
     public let time: Double
     public let category: DebugEventCategory

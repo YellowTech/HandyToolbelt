@@ -21,15 +21,14 @@ import HandyToolbeltControl
         let inputURL = directory.appendingPathComponent("settings.json")
         var fixture = AppConfiguration()
         fixture.bindings = [GestureBinding(gesture: .init(kind: .doubleTap, fingers: 3), action: .init(kind: .appleScript, script: "error \"must never execute\""))]
-        fixture.stacks = [GestureStack(name: "Disabled draft", isEnabled: false)]
         let data = try SettingsTransferIO.encoded(fixture)
-        check(try same(ConfigurationDocumentDecoder.validated(data), fixture), "Roundtrip preserves temporal gestures and stacks")
+        check(try same(ConfigurationDocumentDecoder.validated(data), fixture), "Roundtrip preserves temporal gestures")
         for version in 1...6 {
             let legacy = Data("{\"version\":\(version),\"bindings\":[]\(version < 4 ? ",\"isEnabled\":true" : "")}".utf8)
-            check(try ConfigurationDocumentDecoder.validated(legacy).version == 6, "Legacy migration")
+            check(try ConfigurationDocumentDecoder.validated(legacy).version == 7, "Legacy migration")
         }
         rejects({ _ = try ConfigurationDocumentDecoder.validated(Data("{\"version\":99,\"bindings\":[]}".utf8)) }, "Future version")
-        rejects({ _ = try ConfigurationDocumentDecoder.validated(Data("{\"version\":6,\"bindings\":[],\"surprise\":true}".utf8)) }, "Unknown field")
+        rejects({ _ = try ConfigurationDocumentDecoder.validated(Data("{\"version\":7,\"bindings\":[],\"surprise\":true}".utf8)) }, "Unknown field")
         rejects({ _ = try ConfigurationDocumentDecoder.validated(Data("{bad".utf8)) }, "Malformed JSON")
         var invalid = fixture
         invalid.bindings[0].action.script = ""

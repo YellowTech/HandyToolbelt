@@ -179,16 +179,14 @@ struct ControlIntegrationChecks {
         try JSONEncoder().encode(original).write(to: file)
         let validation = try result(cli(["config", "validate", "--file", file.path]))
         check(validation.objectValue?["errors"]?.arrayValue?.isEmpty == true, "Exported configuration validates")
-        var stackConfiguration = config
-        stackConfiguration.stacks = [.init(name: "CLI stack", isEnabled: true, startActions: [.init(kind: .holdModifiers, modifiers: [.option])], bindings: [.init(actions: [.init(kind: .openApplication, applicationBundleIdentifier: "com.apple.finder")])])]
-        let v5Report = try result(call("config.validate", ["configuration": .object(["version": .number(5), "bindings": .array([])])]))
-        check(v5Report.objectValue?["errors"]?.arrayValue?.isEmpty == true, "CLI accepts version 5 migration")
-        let stackReport = try result(call("config.validate", ["configuration": try JSONValue(encoding: stackConfiguration)]))
-        check(stackReport.objectValue?["errors"]?.arrayValue?.isEmpty == true, "Version 5 stack, held modifiers and Open App validate through CLI")
-        var invalidStack = stackConfiguration
-        invalidStack.stacks[0].bindings[0].gesture.corner = .topLeft
-        let stackErrors = try result(call("config.validate", ["configuration": try JSONValue(encoding: invalidStack)]))
-        check(stackErrors.objectValue?["errors"]?.arrayValue?.isEmpty == false, "Stack children cannot nest corner holds")
+        var legacy = original.objectValue!
+        legacy["version"] = .number(6)
+        legacy["stacks"] = .array([.object(["name": .string("Legacy stack")])])
+        var legacyBinding = try JSONValue(encoding: GestureBinding(gesture: .init(kind: .tap, fingers: 2), action: .init(system: .middleClick))).objectValue!
+        legacyBinding["gesture"] = .object(["kind": .string("tap"), "fingers": .number(1), "corner": .string("topLeft")])
+        legacy["bindings"] = .array([.object(legacyBinding)])
+        let legacyReport = try result(call("config.validate", ["configuration": .object(legacy)]))
+        check(legacyReport.objectValue?["errors"]?.arrayValue?.isEmpty == true, "CLI validates a version 6 configuration with removed gesture fields")
         let before = try Data(contentsOf: store.url)
         var bad = original.objectValue!; bad["displayModuleEnabld"] = .bool(false)
         let invalid = try result(call("config.validate", ["configuration": .object(bad)]))
@@ -376,6 +374,12 @@ struct ControlIntegrationChecks {
         restarted.retry()
         check(restarted.available && restarted.error == nil, "Retry starts listener and clears failure")
         _ = try result(cli(["status"]))
+        _ = try result(call("config.apply", ["configuration": .object(legacy), "expectedRevision": .string(try config.revision())]))
+        check(config.version == 7 && config.bindings.count == 1 && config.bindings[0].isEnabled == false && config.bindings[0].gesture.fingers == 2,
+              "CLI applies legacy corner bindings as disabled mappings with supported finger counts")
+        let migrated = try JSONValue(encoding: config)
+        check(migrated.objectValue?["stacks"] == nil && migrated.objectValue?["bindings"]?.arrayValue?.first?.objectValue?["gesture"]?.objectValue?["corner"] == nil,
+              "CLI export omits removed stack and corner fields")
         // Disable does not cancel work already handed to the automation runner.
         let inFlight = try service.run("Complete")
         restarted.setAllowed(false)

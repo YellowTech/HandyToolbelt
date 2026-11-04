@@ -5,8 +5,6 @@ import CryptoKit
 public enum ConfigurationLimits {
     public static let maximumNameLength = 120
     public static let maximumAutomationSteps = 32
-    public static let maximumStackActions = 32
-    public static let maximumStackBindings = 32
     public static let automationDelayRange: ClosedRange<Double> = 0...30
 }
 
@@ -42,7 +40,6 @@ public extension AppConfiguration {
             if text.count > maximum || (!empty && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { error("\(label) must contain 1–\(maximum) characters.") }
         }
         func unique(_ ids: [UUID], _ label: String) { if Set(ids).count != ids.count { error("Duplicate \(label) IDs.") } }
-        unique(stacks.map(\.id), "stack"); unique(stacks.flatMap { $0.bindings.map(\.id) }, "stack binding"); unique(stacks.flatMap { $0.startActions.map(\.id) }, "stack start action")
         unique(bindings.map(\.id), "binding"); unique(applicationGroups.map(\.id), "application group")
         unique(automations.map(\.id), "automation"); unique(automations.flatMap { $0.steps.map(\.id) }, "automation step")
         for group in applicationGroups { bounded(group.name, ConfigurationLimits.maximumNameLength, "App group name") }
@@ -64,40 +61,13 @@ public extension AppConfiguration {
             if binding.name.count > ConfigurationLimits.maximumNameLength { error("\(label): name exceeds \(ConfigurationLimits.maximumNameLength) characters.") }
             let gesture = binding.gesture
             if !gesture.allowedFingerCounts().contains(gesture.fingers) { error("\(label): invalid finger count.") }
-            if gesture.corner != .none && gesture.fingers > 4 { error("\(label): corner modifier needs one additional finger (maximum five total).") }
             var issues = actionErrors(binding.action, label, nested: false)
             if gesture.kind == .forceClick && binding.device != .trackpad { issues.append("\(label): Force click requires a Force Touch trackpad.") }
             if let group = binding.applicationGroupID, !applicationGroups.contains(where: { $0.id == group }) { issues.append("\(label): missing app group.") }
             if binding.isEnabled { result.errors += issues } else { result.warnings += issues }
             if hasConflict(binding) { error("\(label): overlaps an enabled binding for the same gesture and scope.") }
         }
-        for stack in stacks {
-            let label = "Stack \(stack.name)"
-            var issues: [String] = []
-            if stack.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || stack.name.count > ConfigurationLimits.maximumNameLength { issues.append("\(label): name must contain 1–\(ConfigurationLimits.maximumNameLength) characters.") }
-            if stack.corner == .none { issues.append("\(label): a held corner is required.") }
-            if let group = stack.applicationGroupID, !applicationGroups.contains(where: { $0.id == group }) { issues.append("\(label): missing app group.") }
-            if stack.startActions.count > ConfigurationLimits.maximumStackActions || stack.releaseActions.count > ConfigurationLimits.maximumStackActions || stack.bindings.count > ConfigurationLimits.maximumStackBindings { issues.append("\(label): each phase and child list is limited to 32 entries.") }
-            for start in stack.startActions {
-                if start.kind == .action { issues += actionErrors(start.action, label, nested: false) }
-                else if start.modifiers.isEmpty { issues.append("\(label): Hold Modifiers needs at least one modifier.") }
-            }
-            for action in stack.releaseActions { issues += actionErrors(action, label, nested: false) }
-            for child in stack.bindings {
-                var childIssues: [String] = []
-                if child.name.count > ConfigurationLimits.maximumNameLength { childIssues.append("\(label): child name exceeds \(ConfigurationLimits.maximumNameLength) characters.") }
-                if stack.device != .trackpad && child.gesture.kind == .forceClick { childIssues.append("\(label): Force click requires a Force Touch trackpad.") }
-                if child.gesture.corner != .none || !child.gesture.allowedFingerCounts(isStackChild: true).contains(child.gesture.fingers) { childIssues.append("\(label): child gestures need 1–4 fingers and no corner; anchored gestures need 2–4 fingers, and middle tip-taps need three.") }
-                if !(1...ConfigurationLimits.maximumStackActions).contains(child.actions.count) { childIssues.append("\(label): child gestures need 1–32 actions.") }
-                for action in child.actions { childIssues += actionErrors(action, label, nested: false) }
-                if child.isEnabled {
-                    if stack.bindings.contains(where: { $0.id != child.id && $0.isEnabled && $0.gesture == child.gesture && $0.keyboardModifiers.overlaps(child.keyboardModifiers) }) { childIssues.append("\(label): overlapping enabled child gestures.") }
-                    issues += childIssues
-                } else { result.warnings += childIssues }
-            }
-            if stack.isEnabled { result.errors += issues } else { result.warnings += issues }
-            result.errors += conflictMessages(for: stack).map { "\(label): \($0)" }
-        }
+
         for automation in automations {
             bounded(automation.name, ConfigurationLimits.maximumNameLength, "Automation name")
             if !(1...ConfigurationLimits.maximumAutomationSteps).contains(automation.steps.count) { error("Automation \(automation.name) must contain 1–\(ConfigurationLimits.maximumAutomationSteps) steps.") }

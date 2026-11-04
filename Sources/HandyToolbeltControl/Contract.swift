@@ -94,7 +94,7 @@ public enum ControlCommand: String, CaseIterable, Sendable {
                 output: object([
                     "revision": string()
                 ], required: ["revision"]),
-                example: .object(["configuration": .object(["version": .number(6), "bindings": .array([]), "trackpadModuleEnabled": .bool(false)] ), "expectedRevision": .string("REVISION")] ))
+                example: .object(["configuration": .object(["version": .number(7), "bindings": .array([]), "trackpadModuleEnabled": .bool(false)] ), "expectedRevision": .string("REVISION")] ))
         case .config_get:
             return .init(
                 description: "Read the complete configuration and its revision.",
@@ -124,7 +124,7 @@ public enum ControlCommand: String, CaseIterable, Sendable {
                     "errors": array(string()),
                     "warnings": array(string())
                 ], required: ["errors", "warnings"]),
-                example: .object(["configuration": .object(["version": .number(6), "bindings": .array([]), "trackpadModuleEnabled": .bool(false)] )] ))
+                example: .object(["configuration": .object(["version": .number(7), "bindings": .array([]), "trackpadModuleEnabled": .bool(false)] )] ))
         case .display_dismiss:
             return .init(
                 description: "Dismiss one progress session, or all sessions.",
@@ -260,7 +260,7 @@ public enum ControlContract {
             "descriptions": .object(Dictionary(uniqueKeysWithValues: ControlCommand.allCases.map { ($0.rawValue, .string($0.specification.description)) })),
             "$defs": .object(definitions),
             "configuration": .object(["$ref": .string("#/$defs/AppConfiguration")]),
-            "notes": .array([.string("Use config.get, edit the configuration, then config.validate and config.apply with expectedRevision from config.get."), .string("All IDs must be unique within each kind. Group and automation references must exist."), .string("Force clicks require a Force Touch trackpad and use 1–5 fingers, or 1–4 with a corner or as a stack child. Native app clicks may also occur; a paired Click action waits for release and is discarded after Force click. Ordinary taps, clicks, and swipes without a corner require 2–5 fingers; corner gestures and stack children can use 1 finger. Left/right tip-taps and tip-swipes use 2–4 fingers: 1–3 resting fingers plus one active finger. Middle tip-taps use exactly 3 fingers. A corner modifier reserves one extra finger (maximum 5 total)."), .string("Enabled bindings with overlapping gesture and scope are errors. Incomplete disabled actions are warnings."), .string("display requests succeed with displayed:false when Overlays is off or unavailable."), .string("One automation runs at a time. Cancellation cannot interrupt a native AppleScript already in flight."), .string("Progress steps use 1-based indexes. External progress expires 30 seconds after an update; in-process automation progress remains until the run ends or feedback is dismissed; completion dismisses after 1 second, failure after 3.")]),
+            "notes": .array([.string("Use config.get, edit the configuration, then config.validate and config.apply with expectedRevision from config.get."), .string("All IDs must be unique within each kind. Group and automation references must exist."), .string("Force clicks require a Force Touch trackpad and use 1–5 fingers. Native app clicks may also occur; a paired Click action waits for release and is discarded after Force click. Ordinary taps, clicks, and swipes require 2–5 fingers. Left/right tip-taps and tip-swipes use 2–4 fingers: 1–3 resting fingers plus one active finger. Middle tip-taps use exactly 3 fingers."), .string("Enabled bindings with overlapping gesture and scope are errors. Incomplete disabled actions are warnings."), .string("display requests succeed with displayed:false when Overlays is off or unavailable."), .string("One automation runs at a time. Cancellation cannot interrupt a native AppleScript already in flight."), .string("Progress steps use 1-based indexes. External progress expires 30 seconds after an update; in-process automation progress remains until the run ends or feedback is dismissed; completion dismisses after 1 second, failure after 3.")]),
             "examples": .array(ControlCommand.allCases.map { .object(["command": .string($0.rawValue), "parameters": $0.specification.example]) })
         ])
     }
@@ -307,7 +307,6 @@ public enum ControlContract {
                 "applicationGroups": array(ref("ApplicationGroup")),
                 "automations": array(ref("Automation")),
                 "bindings": array(ref("Binding")),
-                "stacks": array(ref("GestureStack")),
                 "powerModuleEnabled": boolean,
                 "coffeeModuleEnabled": boolean,
                 "snappingModuleEnabled": boolean,
@@ -317,7 +316,7 @@ public enum ControlContract {
                 "mouseTuning": ref("Tuning"),
                 "trackpadModuleEnabled": boolean,
                 "trackpadTuning": ref("Tuning"),
-                "version": extending(number(integer: true), ["enum": .array([.number(6)])]),
+                "version": extending(number(integer: true), ["enum": .array([.number(7)])]),
                 "visualFeedbackEnabled": boolean,
                 "windowSwitcher": ref("WindowSwitcher")
             ], required: ["version", "bindings"]),
@@ -380,34 +379,17 @@ public enum ControlContract {
                 "mode": enumeration(["any", "exact"]),
                 "modifiers": array(enumeration(KeyboardModifier.allCases.map(\.rawValue)), max: 4)
             ], required: ["mode", "modifiers"]),
-            "GestureStackAction": object([
-                "id": uuid, "kind": enumeration(GestureStackActionKind.allCases.map(\.rawValue)),
-                "action": ref("Action"), "modifiers": array(enumeration(KeyboardModifier.allCases.map(\.rawValue)), max: 4)
-            ], required: ["id", "kind", "action", "modifiers"]),
-            "GestureStackBinding": object([
-                "name": string(max: ConfigurationLimits.maximumNameLength), "id": uuid, "gesture": ref("Gesture"), "keyboardModifiers": ref("KeyboardModifierRequirement"),
-                "actions": array(ref("Action"), max: ConfigurationLimits.maximumStackActions), "isEnabled": boolean
-            ], required: ["id", "gesture", "actions"]),
-            "GestureStack": object([
-                "id": uuid, "name": string(max: ConfigurationLimits.maximumNameLength),
-                "device": enumeration(InputDevice.allCases.map(\.rawValue)), "corner": enumeration(Corner.allCases.map(\.rawValue)),
-                "applicationGroupID": uuid, "keyboardModifiers": ref("KeyboardModifierRequirement"), "isEnabled": boolean,
-                "startActions": array(ref("GestureStackAction"), max: ConfigurationLimits.maximumStackActions),
-                "bindings": array(ref("GestureStackBinding"), max: ConfigurationLimits.maximumStackBindings),
-                "releaseActions": array(ref("Action"), max: ConfigurationLimits.maximumStackActions)
-            ], required: ["id", "name", "device", "corner", "startActions", "bindings", "releaseActions"]),
             "Gesture": object([
-                "corner": enumeration(Corner.allCases.map(\.rawValue)),
                 "fingers": number(integer: true, min: 1, max: 5),
                 "kind": enumeration(GestureKind.allCases.map(\.rawValue))
-            ], required: ["kind", "fingers", "corner"]),
+            ], required: ["kind", "fingers"]),
             "Haptic": enumeration(HapticPattern.allCases.map(\.rawValue)),
             "Shortcut": object([
                 "keyCode": number(integer: true, min: 0, max: 65535),
                 "keyLabel": string(min: 1, max: ConfigurationLimits.maximumNameLength),
                 "modifiers": number(integer: true, min: 0)
             ], required: ["keyCode", "modifiers", "keyLabel"]),
-            "Tuning": object(GestureTuning.bounds.mapValues { number(min: $0.lowerBound, max: $0.upperBound) }, required: ["tapDuration", "tapTravel", "anchorHold", "cornerHold", "swipeTravel", "handAngleDegrees", "tipSeparation", "cornerSize"]),
+            "Tuning": object(GestureTuning.bounds.mapValues { number(min: $0.lowerBound, max: $0.upperBound) }, required: ["tapDuration", "tapTravel", "anchorHold", "swipeTravel", "handAngleDegrees", "tipSeparation"]),
             "WindowSwitcher": object([
                 "currentAppOnly": boolean,
                 "includeHidden": boolean,
@@ -474,19 +456,35 @@ public enum ControlContract {
                 "message": string()
             ], required: ["id", "title", "state", "steps"]),
         ]
-        var legacy5 = definitions["AppConfiguration"]!.objectValue!
-        var properties5 = legacy5["properties"]!.objectValue!
-        properties5.removeValue(forKey: "powerModuleEnabled")
-        properties5["version"] = extending(number(integer: true), ["enum": .array([.number(5)])])
-        legacy5["properties"] = .object(properties5)
-        definitions["Version5AppConfiguration"] = .object(legacy5)
-        var legacy4 = definitions["AppConfiguration"]!.objectValue!
-        var properties = legacy4["properties"]!.objectValue!
-        properties.removeValue(forKey: "stacks")
-        properties.removeValue(forKey: "powerModuleEnabled")
-        properties["version"] = extending(number(integer: true), ["enum": .array([.number(4)])])
-        legacy4["properties"] = .object(properties)
-        definitions["Version4AppConfiguration"] = .object(legacy4)
+        // Legacy settings accept removed fields so decoding can migrate the saved bindings.
+        func replacingProperties(_ schema: JSONValue, with overrides: JSONObject) -> JSONValue {
+            var definition = schema.objectValue!
+            definition["properties"] = .object(definition["properties"]!.objectValue!.merging(overrides) { _, value in value })
+            return .object(definition)
+        }
+        definitions["LegacyGesture"] = replacingProperties(definitions["Gesture"]!, with: [
+            "corner": enumeration(["none", "topLeft", "topRight", "bottomLeft", "bottomRight"])
+        ])
+        definitions["LegacyBinding"] = replacingProperties(definitions["Binding"]!, with: ["gesture": ref("LegacyGesture")])
+        definitions["LegacyTuning"] = replacingProperties(definitions["Tuning"]!, with: [
+            "cornerHold": number(min: 0.10, max: 0.80),
+            "cornerSize": number(min: 0.10, max: 0.35)
+        ])
+        let legacyFields: JSONObject = [
+            "bindings": array(ref("LegacyBinding")),
+            "mouseTuning": ref("LegacyTuning"),
+            "trackpadTuning": ref("LegacyTuning")
+        ]
+        definitions["LegacyAppConfiguration"] = replacingProperties(definitions["LegacyAppConfiguration"]!, with: legacyFields)
+        for version in 4...6 {
+            var definition = replacingProperties(definitions["AppConfiguration"]!, with: legacyFields).objectValue!
+            var properties = definition["properties"]!.objectValue!
+            properties["version"] = extending(number(integer: true), ["enum": .array([.number(Double(version))])])
+            if version < 6 { properties.removeValue(forKey: "powerModuleEnabled") }
+            if version >= 5 { properties["stacks"] = array(object([:], additional: true)) }
+            definition["properties"] = .object(properties)
+            definitions["Version\(version)AppConfiguration"] = .object(definition)
+        }
         return definitions
     }
     public static var commandHelp: String {

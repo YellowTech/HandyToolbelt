@@ -134,7 +134,7 @@ private func sampleWindows() -> [WindowItem] {
     config.trackpadModuleEnabled = false
     config.windowSwitcher.shortcut = .commandTab; config.windowSwitcher.includeMinimized = false
     config.windowSwitcher.currentAppOnly = true
-    config.bindings.append(.init(gesture: .init(kind: .tipTapRight, corner: .bottomLeft), action: .init(system: .nextWindow)))
+    config.bindings.append(.init(gesture: .init(kind: .tipTapRight, fingers: 3), action: .init(system: .nextWindow)))
     let loaded = try JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(config))
     #expect(!loaded.trackpadModuleEnabled)
     #expect(loaded.windowSwitcher == config.windowSwitcher)

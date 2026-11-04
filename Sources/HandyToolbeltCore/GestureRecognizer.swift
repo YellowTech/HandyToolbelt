@@ -4,6 +4,9 @@ public struct TouchPoint: Equatable, Sendable {
     public var x: Double
     public var y: Double
     public init(x: Double, y: Double) { self.x = x; self.y = y }
+    public func isInsideSurface(inset: Double) -> Bool {
+        x >= inset && x <= 1 - inset && y >= inset && y <= 1 - inset
+    }
     func distance(to other: Self) -> Double { hypot(x - other.x, y - other.y) }
 }
 
@@ -47,7 +50,6 @@ public struct GestureRecognizer {
         var travel: Double = 0
         var cancelled = false
         var emitted = false
-        var corner: Corner
         var longEmitted = false
         var temporalSpecs: Set<GestureSpec> = []
         var lostMembers = false
@@ -57,7 +59,6 @@ public struct GestureRecognizer {
         var tapper: Int
         var began: Double
         var kind: GestureKind
-        var corner: Corner
         var emitted = false
         var origins: [Int: TouchPoint] = [:]
         var temporalSpecs: Set<GestureSpec> = []
@@ -69,8 +70,6 @@ public struct GestureRecognizer {
     public private(set) var feedback = DetectionFeedback()
     /// Increments for completed/rejected attempts, allowing the gym to keep a bounded history.
     public private(set) var feedbackSequence = 0
-    public private(set) var modifier: Corner = .none
-    public private(set) var modifierFinger: Int?
     public private(set) var contacts: [Contact] = []
     private var tracks: [Int: Track] = [:]
     private var chord: Chord?
@@ -95,7 +94,7 @@ public struct GestureRecognizer {
     private var pendingTip: PendingTip?
     private var pendingTap: PendingTap?
     public var nextDeadline: Double? { [pendingTap.flatMap { $0.secondBegan == nil ? $0.deadline : nil }, pendingTip.flatMap { !$0.secondBegan ? $0.deadline : nil }].compactMap { $0 }.min() }
-    /// Cancels reservations as well as a deferred single tap. The current free-finger chord must lift.
+    /// Cancels reservations as well as a deferred single tap. The current chord must lift.
     public mutating func cancelTemporalGestures() {
         pendingTap = nil; pendingTip = nil; tip?.temporalSpecs = []
         tip?.emitted = true
@@ -120,12 +119,11 @@ public struct GestureRecognizer {
 
     public mutating func reset() {
         pendingTip = nil; tracks = [:]; contacts = []; chord = nil; tip = nil; pendingTap = nil
-        modifier = .none; modifierFinger = nil; waitForRelease = false; lastTime = nil
+        waitForRelease = false; lastTime = nil
         feedback = DetectionFeedback()
     }
 
-    /// Only corners used by enabled bindings are reserved as modifiers.
-    public mutating func process(_ input: [Contact], at time: Double, enabledCorners: Set<Corner> = [], physicalButtonDown: Bool = false, eligibleTemporalSpecs: Set<GestureSpec> = []) -> [GestureSpec] {
+    public mutating func process(_ input: [Contact], at time: Double, physicalButtonDown: Bool = false, eligibleTemporalSpecs: Set<GestureSpec> = []) -> [GestureSpec] {
         guard time.isFinite else { reset(); return [] }
         if let lastTime, time < lastTime || time - lastTime > 0.8 { reset() }
         lastTime = time
@@ -150,16 +148,14 @@ public struct GestureRecognizer {
             tracks[contact.id] = t
         }
         // A second touch reserves the first tap only if its onset is inside the window.
-        let oldFree = Set(old.keys).subtracting(modifierFinger.map { [$0] } ?? [])
-        let incomingFree = ids.subtracting(modifierFinger.map { [$0] } ?? [])
-        if var pending = pendingTap, pending.secondBegan == nil, oldFree.isEmpty, !incomingFree.isEmpty, time <= pending.deadline {
+        if var pending = pendingTap, pending.secondBegan == nil, old.isEmpty, !ids.isEmpty, time <= pending.deadline {
             pending.secondBegan = time; pendingTap = pending
         }
-        if physicalButtonDown || (modifierFinger.map { !ids.contains($0) || (tracks[$0]?.travel ?? 1) > tuning.tapTravel || !enabledCorners.contains(modifier) } ?? false) { pendingTap = nil }
+        if physicalButtonDown { pendingTap = nil }
         if let pending = pendingTip {
-            let double = pending.spec.kind.doubleTipTapKind.map { GestureSpec(kind: $0, fingers: pending.spec.fingers, corner: pending.spec.corner) }
-            if physicalButtonDown || !pending.anchors.isSubset(of: ids) || pending.spec.corner != modifier ||
-                ids.subtracting(modifierFinger.map { [$0] } ?? []).subtracting(pending.anchors).count > 1 ||
+            let double = pending.spec.kind.doubleTipTapKind.map { GestureSpec(kind: $0, fingers: pending.spec.fingers) }
+            if physicalButtonDown || !pending.anchors.isSubset(of: ids) ||
+                ids.subtracting(pending.anchors).count > 1 ||
                 !(double.map { eligibleTemporalSpecs.contains($0) } ?? false) || pending.anchors.contains(where: { id in
                     guard let position = tracks[id]?.position, let origin = pending.origins[id] else { return true }
                     return position.distance(to: origin) > tuning.tapTravel
@@ -167,31 +163,12 @@ public struct GestureRecognizer {
         }
         var events = advanceTime(to: time)
 
-        // A lifted or moved modifier cannot silently become an ordinary gesture.
-        if let anchor = modifierFinger,
-           !ids.contains(anchor) || (tracks[anchor]?.travel ?? 1) > tuning.tapTravel || !enabledCorners.contains(modifier) {
-            chord = nil; tip = nil; pendingTap = nil; pendingTip = nil; modifier = .none; modifierFinger = nil
-            waitForRelease = !ids.isEmpty
-            report(.rejected, "Corner finger lifted or moved. Lift all fingers and try again.")
-        }
-        if modifierFinger == nil && !waitForRelease {
-            for id in ids.sorted() {
-                guard let t = tracks[id], time - t.began >= tuning.cornerHold, t.travel <= tuning.tapTravel,
-                      let corner = Corner.allCases.first(where: { enabledCorners.contains($0) && $0.contains(t.start, size: tuning.cornerSize) && $0.contains(t.position, size: tuning.cornerSize) }) else { continue }
-                modifier = corner; modifierFinger = id; chord = nil; tip = nil; pendingTap = nil; pendingTip = nil
-                feedback = DetectionFeedback()
-                feedback.phase = .holding; feedback.fingerCount = input.count
-                feedback.message = "Corner hold ready. Use your other fingers for the gesture."
-                break
-            }
-        }
-        let freeIDs = ids.subtracting(modifierFinger.map { [$0] } ?? [])
         if !waitForRelease {
-            // Every pre-existing free finger must qualify as a stationary anchor.
-            if tip == nil, chord?.longEmitted != true, (2...4).contains(freeIDs.count), input.count <= 5,
-               newIDs.intersection(freeIDs).count == 1,
-               let tapper = newIDs.intersection(freeIDs).first, let tapping = tracks[tapper] {
-                let anchors = freeIDs.subtracting([tapper])
+            // Every pre-existing finger must qualify as a stationary anchor.
+            if tip == nil, chord?.longEmitted != true, (2...4).contains(ids.count),
+               newIDs.count == 1,
+               let tapper = newIDs.first, let tapping = tracks[tapper] {
+                let anchors = ids.subtracting([tapper])
                 let held = anchors.compactMap { old[$0] }
                 if held.count == anchors.count {
                     let separations = held.map { tuning.projectedSeparation(from: $0.position, to: tapping.position, aspectRatio: surfaceAspectRatio) }
@@ -200,8 +177,7 @@ public struct GestureRecognizer {
                         return track.samples.allSatisfy { $0.1.distance(to: track.position) <= tuning.tapTravel }
                     }
                     let interior = !usesTrackpadEdgeDeadzone || held.allSatisfy { track in
-                        let p = track.position, rim = tuning.tipEdgeDeadzone
-                        return p.x >= rim && p.x <= 1 - rim && p.y >= rim && p.y <= 1 - rim
+                        track.position.isInsideSurface(inset: tuning.tipEdgeDeadzone)
                     }
                     let points = held.map(\.position) + [tapping.position]
                     let nearby = points.allSatisfy { a in points.allSatisfy { b in
@@ -217,10 +193,10 @@ public struct GestureRecognizer {
                     feedback.separation = separations.min(by: { abs($0) < abs($1) }) ?? 0
                     if ready && (left || right || middle) {
                         tip = Tip(anchors: anchors, tapper: tapper, began: time,
-                                  kind: middle ? .tipTapMiddle : (left ? .tipTapLeft : .tipTapRight), corner: modifier,
+                                  kind: middle ? .tipTapMiddle : (left ? .tipTapLeft : .tipTapRight),
                                   origins: Dictionary(uniqueKeysWithValues: anchors.compactMap { id in old[id].map { (id, $0.position) } }), temporalSpecs: eligibleTemporalSpecs)
                         if let pending = pendingTip {
-                            let spec = GestureSpec(kind: middle ? .tipTapMiddle : (left ? .tipTapLeft : .tipTapRight), fingers: anchors.count + 1, corner: modifier)
+                            let spec = GestureSpec(kind: middle ? .tipTapMiddle : (left ? .tipTapLeft : .tipTapRight), fingers: anchors.count + 1)
                             if !pending.secondBegan && time <= pending.deadline && pending.spec == spec && pending.anchors == anchors && pending.position.distance(to: tapping.position) <= tuning.tapTravel * 2 {
                                 pendingTip?.secondBegan = true
                             } else {
@@ -254,8 +230,8 @@ public struct GestureRecognizer {
                 feedback.anchorPosition = centroid(anchors.map(\.position)); feedback.tapperPosition = active?.position
                 let expected = candidate.anchors.union([candidate.tapper])
                 let rejection: String?
-                if !candidate.anchors.isSubset(of: freeIDs) { rejection = "Resting finger lifted before the gesture finished." }
-                else if !freeIDs.isSubset(of: expected) || input.count > 5 { rejection = "An extra or replaced finger joined the gesture." }
+                if !candidate.anchors.isSubset(of: ids) { rejection = "Resting finger lifted before the gesture finished." }
+                else if !ids.isSubset(of: expected) { rejection = "An extra or replaced finger joined the gesture." }
                 else if anchorMoved { rejection = "Resting finger moved beyond the movement allowance." }
                 else if physicalButtonDown { rejection = "Physical click detected. Tap without pressing." }
                 else { rejection = nil }
@@ -264,14 +240,14 @@ public struct GestureRecognizer {
                     // Raw button samples and the click event may arrive in either order.
                     // Preserve ordinary click dispatch only for an intact, un-emitted candidate.
                     let clickMayDispatch = physicalButtonDown && !candidate.emitted &&
-                        candidate.anchors.isSubset(of: freeIDs) && freeIDs.isSubset(of: expected) &&
-                        input.count <= 5 && !anchorMoved
+                        candidate.anchors.isSubset(of: ids) && ids.isSubset(of: expected) &&
+                        !anchorMoved
                     tip = nil; pendingTip = nil; chord?.cancelled = true
                     waitForRelease = !ids.isEmpty && !clickMayDispatch
-                } else if !freeIDs.contains(candidate.tapper) {
+                } else if !ids.contains(candidate.tapper) {
                     if !candidate.emitted, let active, let doubleKind = candidate.kind.doubleTipTapKind, time - candidate.began <= tuning.tapDuration && active.travel <= tuning.tapTravel {
-                        let single = GestureSpec(kind: candidate.kind, fingers: candidate.anchors.count + 1, corner: candidate.corner)
-                        let double = GestureSpec(kind: doubleKind, fingers: single.fingers, corner: single.corner)
+                        let single = GestureSpec(kind: candidate.kind, fingers: candidate.anchors.count + 1)
+                        let double = GestureSpec(kind: doubleKind, fingers: single.fingers)
                         if let pending = pendingTip, pending.secondBegan {
                             if pending.spec == single && candidate.temporalSpecs.contains(double) && eligibleTemporalSpecs.contains(double) { events.append(double) }
                             pendingTip = nil
@@ -290,7 +266,7 @@ public struct GestureRecognizer {
                     if (horizontal && abs(dx) >= tuning.swipeTravel) || (vertical && abs(dy) >= tuning.swipeTravel) {
                         let kind: GestureKind = horizontal ? (dx < 0 ? .tipSwipeLeft : .tipSwipeRight) : (dy < 0 ? .tipSwipeDown : .tipSwipeUp)
                         pendingTip = nil
-                        events.append(.init(kind: kind, fingers: candidate.anchors.count + 1, corner: candidate.corner))
+                        events.append(.init(kind: kind, fingers: candidate.anchors.count + 1))
                         candidate.emitted = true; tip = candidate
                     } else if time - candidate.began > tuning.tapDuration {
                         // A slow anchored swipe is still valid after the tap window closes.
@@ -300,8 +276,8 @@ public struct GestureRecognizer {
                     }
                 }
             }
-            if tip == nil && events.isEmpty && freeIDs.count == 1 && feedback.phase != .recognized && feedback.phase != .rejected,
-               let id = freeIDs.first, let held = tracks[id] {
+            if tip == nil && events.isEmpty && ids.count == 1 && feedback.phase != .recognized && feedback.phase != .rejected,
+               let id = ids.first, let held = tracks[id] {
                 feedback.phase = .holding
                 feedback.anchorID = id; feedback.anchorPosition = held.position
                 feedback.holdTime = time - held.began; feedback.travel = held.travel
@@ -311,14 +287,14 @@ public struct GestureRecognizer {
                     (feedback.holdTime >= tuning.anchorHold ? "Resting finger ready. Tap on either side." : "Hold the resting finger a little longer…")
             }
             if !events.isEmpty || tip != nil { pendingTap = nil }
-            if chord == nil && !freeIDs.isEmpty {
-                chord = Chord(began: time, origins: [:], peakSince: time, corner: modifier, temporalSpecs: eligibleTemporalSpecs)
+            if chord == nil && !ids.isEmpty {
+                chord = Chord(began: time, origins: [:], peakSince: time, temporalSpecs: eligibleTemporalSpecs)
                 if tip != nil || events.contains(where: { $0.kind.isAnchored }) { chord?.cancelled = true }
             }
             if var group = chord {
-                if !Set(group.origins.keys).isSubset(of: freeIDs) { group.lostMembers = true }
-                if group.lostMembers && !freeIDs.isSubset(of: Set(group.origins.keys)) { group.cancelled = true }
-                for id in freeIDs {
+                if !Set(group.origins.keys).isSubset(of: ids) { group.lostMembers = true }
+                if group.lostMembers && !ids.isSubset(of: Set(group.origins.keys)) { group.cancelled = true }
+                for id in ids {
                     guard let track = tracks[id] else { continue }
                     if group.origins[id] == nil {
                         // Adding/replacing fingers late must not produce an accidental chord.
@@ -327,26 +303,25 @@ public struct GestureRecognizer {
                     }
                     group.travel = max(group.travel, group.origins[id]!.distance(to: track.position))
                 }
-                if freeIDs.count > group.peak { group.peak = freeIDs.count; group.peakSince = time }
+                if ids.count > group.peak { group.peak = ids.count; group.peakSince = time }
                 if tip == nil && group.peak >= 2 && !group.cancelled && !group.emitted {
                     feedback.phase = .candidate; feedback.message = "\(group.peak) fingers touching. Tap, click, or move together."
                     feedback.tapTime = time - group.began; feedback.travel = group.travel
                 }
                 if physicalButtonDown { group.cancelled = true; tip = nil }
-                let long = GestureSpec(kind: .longTouch, fingers: group.peak, corner: group.corner)
+                let long = GestureSpec(kind: .longTouch, fingers: group.peak)
                 if !group.cancelled && !group.emitted && !group.lostMembers && tip == nil &&
                     group.temporalSpecs.contains(long) && eligibleTemporalSpecs.contains(long) &&
-                    freeIDs.count == group.peak && group.travel <= tuning.tapTravel && time - group.peakSince >= tuning.longTouchDuration {
+                    ids.count == group.peak && group.travel <= tuning.tapTravel && time - group.peakSince >= tuning.longTouchDuration {
                     events.append(long); group.emitted = true; group.longEmitted = true; pendingTap = nil
                 }
                 if let pending = pendingTap, pending.secondBegan != nil,
                    group.cancelled || group.emitted || group.travel > tuning.tapTravel || time - group.began > tuning.tapDuration {
                     pendingTap = nil
                 }
-                let minimumFingers = group.corner == .none ? 2 : 1
-                if !group.cancelled && !group.emitted && group.peak >= minimumFingers && group.peak <= (group.corner == .none ? 5 : 4) &&
-                    freeIDs.count == group.peak && time - group.peakSince >= 0.045 {
-                    let movements = freeIDs.compactMap { id -> TouchPoint? in
+                if !group.cancelled && !group.emitted && (2...5).contains(group.peak) &&
+                    ids.count == group.peak && time - group.peakSince >= 0.045 {
+                    let movements = ids.compactMap { id -> TouchPoint? in
                         guard let start = group.origins[id], let current = tracks[id]?.position else { return nil }
                         return .init(x: current.x - start.x, y: current.y - start.y)
                     }
@@ -361,15 +336,15 @@ public struct GestureRecognizer {
                     }
                     if coherent && ((horizontal && abs(dx) >= tuning.swipeTravel) || (vertical && abs(dy) >= tuning.swipeTravel)) {
                         let kind: GestureKind = horizontal ? (dx < 0 ? .swipeLeft : .swipeRight) : (dy < 0 ? .swipeDown : .swipeUp)
-                        events.append(.init(kind: kind, fingers: group.peak, corner: group.corner))
+                        events.append(.init(kind: kind, fingers: group.peak))
                         group.emitted = true
                     }
                 }
-                if freeIDs.isEmpty {
-                    if !group.cancelled && !group.emitted && group.peak >= minimumFingers && group.peak <= (group.corner == .none ? 5 : 4) &&
+                if ids.isEmpty {
+                    if !group.cancelled && !group.emitted && (2...5).contains(group.peak) &&
                         time - group.began <= tuning.tapDuration && time - group.peakSince >= 0.035 && group.travel <= tuning.tapTravel {
-                        let tap = GestureSpec(kind: .tap, fingers: group.peak, corner: group.corner)
-                        let double = GestureSpec(kind: .doubleTap, fingers: group.peak, corner: group.corner)
+                        let tap = GestureSpec(kind: .tap, fingers: group.peak)
+                        let double = GestureSpec(kind: .doubleTap, fingers: group.peak)
                         let position = centroid(Array(group.origins.values))!
                         if let pending = pendingTap, pending.secondBegan != nil {
                             // Two tapTravel radii allow natural placement drift without pairing distant chords.
@@ -381,7 +356,7 @@ public struct GestureRecognizer {
                         } else if group.temporalSpecs.contains(double) && eligibleTemporalSpecs.contains(double) {
                             pendingTap = PendingTap(spec: tap, position: position, deadline: time + tuning.doubleTapInterval)
                         } else { events.append(tap) }
-                    } else if group.peak >= minimumFingers && !group.emitted && feedback.phase != .rejected && feedback.phase != .recognized {
+                    } else if group.peak >= 2 && !group.emitted && feedback.phase != .rejected && feedback.phase != .recognized {
                         report(.rejected, group.cancelled ? "Finger count changed too late, or a physical click interrupted the tap." :
                             (group.travel > tuning.tapTravel ? "Fingers moved too far for a tap." : "Tap timing was outside the allowed range."))
                     }
@@ -411,11 +386,11 @@ public struct GestureRecognizer {
         chord?.cancelled = true; tip = nil
         if wasLongTouch { return nil }
         if wasAnchored { waitForRelease = !contacts.isEmpty; return nil }
-        let count = contacts.count - (modifierFinger == nil ? 0 : 1)
+        let count = contacts.count
         guard !waitForRelease, let lastTime, time - lastTime < 0.15, time - lastClick > 0.08,
-              count >= (modifier == .none && !allowSingleFinger ? 2 : 1) && count <= (modifier == .none ? 5 : 4) else { return nil }
+              count >= (allowSingleFinger ? 1 : 2) && count <= 5 else { return nil }
         lastClick = time
-        let result = GestureSpec(kind: .click, fingers: count, corner: modifier)
+        let result = GestureSpec(kind: .click, fingers: count)
         if reportsClick { feedback.gesture = result; report(.recognized, result.title) }
         return result
     }

@@ -8,10 +8,6 @@ import Testing
     var expected = AppConfiguration()
     expected.bindings = [.init(gesture: .init(kind: .tipTapLeft), action: previous.canonicalized, isEnabled: false, applicationGroupID: ApplicationGroup.browsersID, keyboardModifiers: .none)]
     expected.bindings[0].showsToast = false
-    expected.stacks = [.init(name: "Browser", applicationGroupID: ApplicationGroup.browsersID, isEnabled: true,
-        startActions: [.init(action: previous.canonicalized)],
-        bindings: [.init(actions: [previous.canonicalized, next.canonicalized], isEnabled: false)],
-        releaseActions: [next.canonicalized])]
     expected.automations = [.init(name: "Browser", steps: [.init(name: "Previous", action: previous.canonicalized), .init(name: "Next", action: next.canonicalized)])]
     // Recreate the on-disk legacy shape, including inactive aliases on other kinds.
     func legacy(_ value: Any) -> Any {
@@ -31,8 +27,6 @@ import Testing
     // Exact encoded equality covers IDs, enable flags, scopes, modifier requirements and unrelated action fields.
     #expect(try encoder.encode(restored) == encoder.encode(expected))
     #expect(restored.bindings[0].action.kind == .shortcut)
-    #expect(restored.stacks[0].startActions[0].action.shortcut?.display == "⌃⇧⇥")
-    #expect(restored.stacks[0].releaseActions[0].shortcut?.display == "⌃⇥")
     let output = try encoder.encode(restored)
     #expect(!String(decoding: output, as: UTF8.self).contains("previousTab"))
     #expect(!String(decoding: output, as: UTF8.self).contains("nextTab"))

@@ -36,26 +36,22 @@ final class NativePressArbiterTests: XCTestCase {
     }
     func testSnapshotMembershipAllowsLiftButNeverTransfer() {
         let points = [Contact(id: 1, x: 0.05, y: 0.95), Contact(id: 2, x: 0.5, y: 0.5)]
-        func snapshot() -> NativePressContacts { NativePressContacts(deviceID: 1, contacts: points, corner: .topLeft, cornerFinger: 1, cornerSize: 0.22, time: 1) }
+        func snapshot() -> NativePressContacts { NativePressContacts(deviceID: 1, contacts: points, time: 1) }
         var value = snapshot()
         XCTAssertTrue(value.accepts(deviceID: 1, contacts: [points[0]], at: 1.01))
         XCTAssertTrue(value.accepts(deviceID: 1, contacts: [], at: 1.02))
         XCTAssertFalse(value.accepts(deviceID: 1, contacts: points, at: 1.03), "Lifted IDs cannot rejoin")
         value = snapshot()
-        XCTAssertFalse(value.accepts(deviceID: 1, contacts: [points[1]], at: 1.01), "A corner hold cannot end while free fingers remain")
+        XCTAssertTrue(value.accepts(deviceID: 1, contacts: [points[1]], at: 1.01))
         value = snapshot()
         XCTAssertFalse(value.accepts(deviceID: 2, contacts: [points[0]], at: 1.01))
         value = snapshot()
-        XCTAssertFalse(value.accepts(deviceID: 1, contacts: [.init(id: 1, x: 0.5, y: 0.5)], at: 1.01))
-        value = snapshot()
-        XCTAssertFalse(value.accepts(deviceID: 1, contacts: [.init(id: 1, x: 0.12, y: 0.95), points[1]], at: 1.01), "Corner movement inside the boundary still cancels")
+        XCTAssertFalse(value.accepts(deviceID: 1, contacts: [.init(id: 3, x: 0.5, y: 0.5)], at: 1.01))
         value = snapshot()
         XCTAssertFalse(value.accepts(deviceID: 1, contacts: points, at: 1.2))
     }
     func testForceFingerLimitsAndNativePressCancelsTap() {
         XCTAssertEqual(GestureSpec(kind: .forceClick).allowedFingerCounts(), [1, 2, 3, 4, 5])
-        XCTAssertEqual(GestureSpec(kind: .forceClick, corner: .topLeft).allowedFingerCounts(), [1, 2, 3, 4])
-        XCTAssertEqual(GestureSpec(kind: .forceClick).allowedFingerCounts(isStackChild: true), [1, 2, 3, 4])
         for count in [1, 5] {
             var recognizer = GestureRecognizer()
             let points = (0..<count).map { Contact(id: $0, x: 0.3 + Double($0) * 0.08, y: 0.5) }
@@ -69,9 +65,7 @@ final class NativePressArbiterTests: XCTestCase {
         var configuration = AppConfiguration()
         configuration.bindings = [GestureBinding(device: .magicMouse, gesture: .init(kind: .forceClick, fingers: 1), action: .init(kind: .showText, text: "Force"))]
         XCTAssertTrue(configuration.validation().errors.contains { $0.contains("Force Touch") })
-        configuration.bindings = []
-        configuration.stacks = [GestureStack(name: "Mouse", device: .magicMouse, corner: .topLeft, isEnabled: true, bindings: [
-            GestureStackBinding(gesture: .init(kind: .forceClick, fingers: 1), actions: [.init(kind: .showText, text: "Draft")], isEnabled: false)])]
+        configuration.bindings[0].isEnabled = false
         XCTAssertTrue(configuration.validation().errors.isEmpty)
         XCTAssertTrue(configuration.validation().warnings.contains { $0.contains("Force Touch") })
     }

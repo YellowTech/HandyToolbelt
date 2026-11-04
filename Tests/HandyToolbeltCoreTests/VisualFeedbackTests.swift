@@ -12,7 +12,7 @@ final class VisualFeedbackTests: XCTestCase {
         object.removeValue(forKey: "visualFeedbackEnabled")
         let config = try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: object))
         XCTAssertFalse(config.visualFeedbackEnabled)
-        object["version"] = 7
+        object["version"] = 8
         XCTAssertThrowsError(try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: object)))
         XCTAssertThrowsError(try JSONDecoder().decode(GestureAction.self, from: Data(#"{"kind":"system","script":""}"#.utf8)))
     }

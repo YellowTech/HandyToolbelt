@@ -28,7 +28,7 @@ struct GestureGymView: View {
                             GymTouchPreview(readout: model.gymReadout, visualization: model.touchVisualization, tuning: model.gymTuning, target: model.gymGesture)
                                 .frame(maxWidth: 470, maxHeight: 220)
                                 .frame(maxWidth: .infinity)
-                                .help("Resting finger is teal, tapping finger blue, and corner hold orange. Keep the pointer over the surface for force-click feedback.")
+                                .help("Resting fingers are teal and tapping fingers are blue. Keep the pointer over the surface for force-click feedback.")
                         }
                         GymDetectionReadout(readout: model.gymReadout, tuning: model.gymTuning, target: model.gymGesture)
                         Divider()
@@ -94,15 +94,13 @@ struct GestureGymView: View {
                                        display: percent(model.gymTuning.tipSeparation))
                             adjustment("Maximum finger spacing", value: $model.gymTuning.tipMaxSeparation, range: GestureTuning.bounds["tipMaxSeparation"]!, step: 0.005,
                                        display: percent(model.gymTuning.tipMaxSeparation))
-                            adjustment("Tip-tap edge deadzone", value: $model.gymTuning.tipEdgeDeadzone, range: GestureTuning.bounds["tipEdgeDeadzone"]!, step: 0.005,
-                                       display: percent(model.gymTuning.tipEdgeDeadzone))
-                            adjustment("Corner hold time", value: $model.gymTuning.cornerHold, range: GestureTuning.bounds["cornerHold"]!, step: 0.01,
-                                       display: milliseconds(model.gymTuning.cornerHold))
-                            adjustment("Corner size", value: $model.gymTuning.cornerSize, range: GestureTuning.bounds["cornerSize"]!, step: 0.01,
-                                       display: percent(model.gymTuning.cornerSize))
+                            if model.selectedDevice == .trackpad {
+                                adjustment("Trackpad edge deadzone", value: $model.gymTuning.tipEdgeDeadzone, range: GestureTuning.bounds["tipEdgeDeadzone"]!, step: 0.005,
+                                           display: percent(model.gymTuning.tipEdgeDeadzone))
+                            }
                             adjustment("Swipe distance", value: $model.gymTuning.swipeTravel, range: GestureTuning.bounds["swipeTravel"]!, step: 0.01,
                                        display: percent(model.gymTuning.swipeTravel))
-                            HelpHint("Spacing follows your hand axis as a percentage of surface width. The edge deadzone ignores tip-taps too close to the surface boundary. Movement uses normalized surface distance. Hand angle sets anchored finger placement; swipe directions stay aligned to the trackpad.")
+                            HelpHint("Spacing follows your hand axis as a percentage of surface width. Trackpad touches that start in the edge deadzone are ignored until you lift them. For tip-taps, rest the anchor fingers inside the usable area. Movement uses normalized surface distance. Hand angle sets anchored finger placement; swipe directions stay aligned to the trackpad.")
                             Button("Restore default detection") { model.gymTuning = GestureTuning() }.controlSize(.small)
                         }.padding(.top, 12).disabled(model.isCalibrating)
             }
@@ -124,12 +122,6 @@ struct GestureGymView: View {
                 Spacer(minLength: 0)
             }
             GestureFingerPicker(gesture: $model.gymGesture)
-            Picker("Corner modifier", selection: Binding(get: { model.gymGesture.corner }, set: {
-                model.gymGesture.corner = $0
-                model.gymGesture = model.gymGesture.normalized()
-            })) {
-                ForEach(Corner.allCases) { corner in Text(corner.title).tag(corner) }
-            }.frame(maxWidth: 350)
             if model.gymGesture.kind == .forceClick {
                 Text(model.forceClickCapability(for: model.selectedDevice).message(includeClickTiming: false)).font(.caption).foregroundStyle(Theme.secondary)
             }
@@ -143,7 +135,7 @@ struct GestureGymView: View {
     private var calibrationSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack { Text("Tip-tap calibration").font(.headline); HelpHint("Use one resting finger and one tapping finger: three taps on each side learn angle, spacing, timing, and movement allowance. Corner and swipe settings stay manual.") }
+                HStack { Text("Tip-tap calibration").font(.headline); HelpHint("Use one resting finger and one tapping finger: three taps on each side learn angle, spacing, timing, and movement allowance. Swipe settings stay manual.") }
                 if model.isCalibrating { Button("Stop", action: model.stopCalibration) }
                 else { Button(model.calibrationSamples.isEmpty ? "Calibrate tip-taps" : "Calibrate again", action: model.startCalibration)
                     .disabled(!model.devices.contains { $0.kind == model.selectedDevice }) }
@@ -265,14 +257,6 @@ struct GymTouchSurface: View {
                     context.draw(Text(title).font(.system(size: 10, weight: .medium)).foregroundColor(Theme.secondary), at: p)
                 }
             }
-            if target.corner != .none {
-                let left = target.corner == .topLeft || target.corner == .bottomLeft
-                let top = target.corner == .topLeft || target.corner == .topRight
-                let width = size.width * tuning.cornerSize, height = size.height * tuning.cornerSize
-                let rect = CGRect(x: left ? 0 : size.width - width, y: top ? 0 : size.height - height, width: width, height: height)
-                context.fill(Path(rect), with: .color(.orange.opacity(snapshot.modifier == target.corner ? 0.28 : 0.10)))
-                context.stroke(Path(rect), with: .color(.orange.opacity(0.5)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-            }
             for (id, samples) in snapshot.trails {
                 var path = Path()
                 for (index, sample) in samples.enumerated() {
@@ -303,7 +287,7 @@ struct GymTouchSurface: View {
                                with: .color(color.opacity(0.65)), lineWidth: 1)
                 let inner = 7 + 7 * contact.pressureSize
                 context.fill(Path(ellipseIn: CGRect(x: p.x - inner, y: p.y - inner, width: inner * 2, height: inner * 2)), with: .color(color))
-                let role = contact.id == snapshot.modifierFinger ? "corner" : contact.id == snapshot.feedback.anchorID ? "rest" : contact.id == snapshot.feedback.tapperID ? "tap" : "\(contact.id)"
+                let role = contact.id == snapshot.feedback.anchorID ? "rest" : contact.id == snapshot.feedback.tapperID ? "tap" : "\(contact.id)"
                 context.draw(Text(role).font(.system(size: 10, weight: .medium)).foregroundColor(Theme.text), at: CGPoint(x: p.x, y: max(10, p.y - 23)))
             }
             if snapshot.feedback.phase == .idle {
@@ -317,7 +301,7 @@ struct GymTouchSurface: View {
         .accessibilityLabel("Live trackpad: \(snapshot.contacts.count) fingers. Hand angle \(Int(tuning.handAngleDegrees)) degrees. \(snapshot.feedback.message)")
     }
     private func color(_ id: Int) -> Color {
-        id == snapshot.modifierFinger ? .orange : id == snapshot.feedback.anchorID ? .teal : .blue
+        id == snapshot.feedback.anchorID ? .teal : .blue
     }
 }
 

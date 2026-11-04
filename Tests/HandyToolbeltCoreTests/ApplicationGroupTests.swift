@@ -113,7 +113,7 @@ private func mapping(group: UUID? = nil, action: SystemAction = .mute, enabled: 
     #expect(restored.applicationGroups == config.applicationGroups)
     #expect(restored.bindings == config.bindings)
     #expect(restored.trackpadTuning == config.trackpadTuning)
-    #expect(restored.version == 6)
+    #expect(restored.version == 7)
 }
 
 @Test func legacyMigrationPreservesExistingGlobalMappings() throws {
@@ -125,7 +125,7 @@ private func mapping(group: UUID? = nil, action: SystemAction = .mute, enabled: 
     json["isEnabled"] = false
     json.removeValue(forKey: "applicationGroups")
     let migrated = try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: json))
-    #expect(migrated.version == 6)
+    #expect(migrated.version == 7)
     #expect(migrated.bindings == config.bindings)
     #expect(migrated.trackpadTuning == config.trackpadTuning)
     #expect(migrated.applicationGroups == ApplicationGroup.examples)

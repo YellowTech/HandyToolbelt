@@ -504,7 +504,7 @@ Example parameters:
 
     ],
     "trackpadModuleEnabled" : false,
-    "version" : 6
+    "version" : 7
   }
 }
 ```
@@ -566,7 +566,7 @@ Example parameters:
 
     ],
     "trackpadModuleEnabled" : false,
-    "version" : 6
+    "version" : 7
   },
   "expectedRevision" : "REVISION"
 }
@@ -1256,12 +1256,6 @@ Successful result:
       "snappingModuleEnabled" : {
         "type" : "boolean"
       },
-      "stacks" : {
-        "items" : {
-          "$ref" : "#/$defs/GestureStack"
-        },
-        "type" : "array"
-      },
       "trackpadModuleEnabled" : {
         "type" : "boolean"
       },
@@ -1270,7 +1264,7 @@ Successful result:
       },
       "version" : {
         "enum" : [
-          6
+          7
         ],
         "type" : "integer"
       },
@@ -1551,16 +1545,6 @@ Successful result:
   "Gesture" : {
     "additionalProperties" : false,
     "properties" : {
-      "corner" : {
-        "enum" : [
-          "none",
-          "topLeft",
-          "topRight",
-          "bottomLeft",
-          "bottomRight"
-        ],
-        "type" : "string"
-      },
       "fingers" : {
         "maximum" : 5,
         "minimum" : 1,
@@ -1593,153 +1577,7 @@ Successful result:
     },
     "required" : [
       "kind",
-      "fingers",
-      "corner"
-    ],
-    "type" : "object"
-  },
-  "GestureStack" : {
-    "additionalProperties" : false,
-    "properties" : {
-      "applicationGroupID" : {
-        "format" : "uuid",
-        "type" : "string"
-      },
-      "bindings" : {
-        "items" : {
-          "$ref" : "#/$defs/GestureStackBinding"
-        },
-        "maxItems" : 32,
-        "type" : "array"
-      },
-      "corner" : {
-        "enum" : [
-          "none",
-          "topLeft",
-          "topRight",
-          "bottomLeft",
-          "bottomRight"
-        ],
-        "type" : "string"
-      },
-      "device" : {
-        "enum" : [
-          "trackpad",
-          "magicMouse"
-        ],
-        "type" : "string"
-      },
-      "id" : {
-        "format" : "uuid",
-        "type" : "string"
-      },
-      "isEnabled" : {
-        "type" : "boolean"
-      },
-      "keyboardModifiers" : {
-        "$ref" : "#/$defs/KeyboardModifierRequirement"
-      },
-      "name" : {
-        "maxLength" : 120,
-        "type" : "string"
-      },
-      "releaseActions" : {
-        "items" : {
-          "$ref" : "#/$defs/Action"
-        },
-        "maxItems" : 32,
-        "type" : "array"
-      },
-      "startActions" : {
-        "items" : {
-          "$ref" : "#/$defs/GestureStackAction"
-        },
-        "maxItems" : 32,
-        "type" : "array"
-      }
-    },
-    "required" : [
-      "id",
-      "name",
-      "device",
-      "corner",
-      "startActions",
-      "bindings",
-      "releaseActions"
-    ],
-    "type" : "object"
-  },
-  "GestureStackAction" : {
-    "additionalProperties" : false,
-    "properties" : {
-      "action" : {
-        "$ref" : "#/$defs/Action"
-      },
-      "id" : {
-        "format" : "uuid",
-        "type" : "string"
-      },
-      "kind" : {
-        "enum" : [
-          "action",
-          "holdModifiers"
-        ],
-        "type" : "string"
-      },
-      "modifiers" : {
-        "items" : {
-          "enum" : [
-            "control",
-            "command",
-            "option",
-            "shift"
-          ],
-          "type" : "string"
-        },
-        "maxItems" : 4,
-        "type" : "array"
-      }
-    },
-    "required" : [
-      "id",
-      "kind",
-      "action",
-      "modifiers"
-    ],
-    "type" : "object"
-  },
-  "GestureStackBinding" : {
-    "additionalProperties" : false,
-    "properties" : {
-      "actions" : {
-        "items" : {
-          "$ref" : "#/$defs/Action"
-        },
-        "maxItems" : 32,
-        "type" : "array"
-      },
-      "gesture" : {
-        "$ref" : "#/$defs/Gesture"
-      },
-      "id" : {
-        "format" : "uuid",
-        "type" : "string"
-      },
-      "isEnabled" : {
-        "type" : "boolean"
-      },
-      "keyboardModifiers" : {
-        "$ref" : "#/$defs/KeyboardModifierRequirement"
-      },
-      "name" : {
-        "maxLength" : 120,
-        "type" : "string"
-      }
-    },
-    "required" : [
-      "id",
-      "gesture",
-      "actions"
+      "fingers"
     ],
     "type" : "object"
   },
@@ -1801,7 +1639,7 @@ Successful result:
       },
       "bindings" : {
         "items" : {
-          "$ref" : "#/$defs/Binding"
+          "$ref" : "#/$defs/LegacyBinding"
         },
         "type" : "array"
       },
@@ -1821,7 +1659,7 @@ Successful result:
         "type" : "boolean"
       },
       "mouseTuning" : {
-        "$ref" : "#/$defs/Tuning"
+        "$ref" : "#/$defs/LegacyTuning"
       },
       "pauseAll" : {
         "type" : "boolean"
@@ -1833,7 +1671,7 @@ Successful result:
         "type" : "boolean"
       },
       "trackpadTuning" : {
-        "$ref" : "#/$defs/Tuning"
+        "$ref" : "#/$defs/LegacyTuning"
       },
       "version" : {
         "enum" : [
@@ -1854,6 +1692,181 @@ Successful result:
       "version",
       "bindings",
       "isEnabled"
+    ],
+    "type" : "object"
+  },
+  "LegacyBinding" : {
+    "additionalProperties" : false,
+    "properties" : {
+      "action" : {
+        "$ref" : "#/$defs/Action"
+      },
+      "applicationGroupID" : {
+        "format" : "uuid",
+        "type" : "string"
+      },
+      "device" : {
+        "enum" : [
+          "trackpad",
+          "magicMouse"
+        ],
+        "type" : "string"
+      },
+      "gesture" : {
+        "$ref" : "#/$defs/LegacyGesture"
+      },
+      "hapticPattern" : {
+        "$ref" : "#/$defs/Haptic"
+      },
+      "id" : {
+        "format" : "uuid",
+        "type" : "string"
+      },
+      "isEnabled" : {
+        "type" : "boolean"
+      },
+      "keyboardModifiers" : {
+        "$ref" : "#/$defs/KeyboardModifierRequirement"
+      },
+      "name" : {
+        "maxLength" : 120,
+        "type" : "string"
+      },
+      "showsToast" : {
+        "default" : true,
+        "description" : "Allow this binding to show gesture toasts when global gesture toasts and Overlays are enabled. Show Text actions use their own message.",
+        "type" : "boolean"
+      }
+    },
+    "required" : [
+      "id",
+      "device",
+      "gesture",
+      "action",
+      "isEnabled"
+    ],
+    "type" : "object"
+  },
+  "LegacyGesture" : {
+    "additionalProperties" : false,
+    "properties" : {
+      "corner" : {
+        "enum" : [
+          "none",
+          "topLeft",
+          "topRight",
+          "bottomLeft",
+          "bottomRight"
+        ],
+        "type" : "string"
+      },
+      "fingers" : {
+        "maximum" : 5,
+        "minimum" : 1,
+        "type" : "integer"
+      },
+      "kind" : {
+        "enum" : [
+          "tap",
+          "longTouch",
+          "doubleTap",
+          "click",
+          "forceClick",
+          "tipTapLeft",
+          "tipTapRight",
+          "tipTapMiddle",
+          "doubleTipTapLeft",
+          "doubleTipTapRight",
+          "doubleTipTapMiddle",
+          "tipSwipeLeft",
+          "tipSwipeRight",
+          "tipSwipeUp",
+          "tipSwipeDown",
+          "swipeLeft",
+          "swipeRight",
+          "swipeUp",
+          "swipeDown"
+        ],
+        "type" : "string"
+      }
+    },
+    "required" : [
+      "kind",
+      "fingers"
+    ],
+    "type" : "object"
+  },
+  "LegacyTuning" : {
+    "additionalProperties" : false,
+    "properties" : {
+      "anchorHold" : {
+        "maximum" : 0.5,
+        "minimum" : 0.05,
+        "type" : "number"
+      },
+      "cornerHold" : {
+        "maximum" : 0.8,
+        "minimum" : 0.1,
+        "type" : "number"
+      },
+      "cornerSize" : {
+        "maximum" : 0.35,
+        "minimum" : 0.1,
+        "type" : "number"
+      },
+      "doubleTapInterval" : {
+        "maximum" : 0.6,
+        "minimum" : 0.15,
+        "type" : "number"
+      },
+      "handAngleDegrees" : {
+        "maximum" : 60,
+        "minimum" : -60,
+        "type" : "number"
+      },
+      "longTouchDuration" : {
+        "maximum" : 1.5,
+        "minimum" : 0.3,
+        "type" : "number"
+      },
+      "swipeTravel" : {
+        "maximum" : 0.35,
+        "minimum" : 0.05,
+        "type" : "number"
+      },
+      "tapDuration" : {
+        "maximum" : 0.8,
+        "minimum" : 0.1,
+        "type" : "number"
+      },
+      "tapTravel" : {
+        "maximum" : 0.12,
+        "minimum" : 0.01,
+        "type" : "number"
+      },
+      "tipEdgeDeadzone" : {
+        "maximum" : 0.15,
+        "minimum" : 0,
+        "type" : "number"
+      },
+      "tipMaxSeparation" : {
+        "maximum" : 0.8,
+        "minimum" : 0.15,
+        "type" : "number"
+      },
+      "tipSeparation" : {
+        "maximum" : 0.2,
+        "minimum" : 0.02,
+        "type" : "number"
+      }
+    },
+    "required" : [
+      "tapDuration",
+      "tapTravel",
+      "anchorHold",
+      "swipeTravel",
+      "handAngleDegrees",
+      "tipSeparation"
     ],
     "type" : "object"
   },
@@ -2387,16 +2400,6 @@ Successful result:
         "minimum" : 0.05,
         "type" : "number"
       },
-      "cornerHold" : {
-        "maximum" : 0.8,
-        "minimum" : 0.1,
-        "type" : "number"
-      },
-      "cornerSize" : {
-        "maximum" : 0.35,
-        "minimum" : 0.1,
-        "type" : "number"
-      },
       "doubleTapInterval" : {
         "maximum" : 0.6,
         "minimum" : 0.15,
@@ -2447,11 +2450,9 @@ Successful result:
       "tapDuration",
       "tapTravel",
       "anchorHold",
-      "cornerHold",
       "swipeTravel",
       "handAngleDegrees",
-      "tipSeparation",
-      "cornerSize"
+      "tipSeparation"
     ],
     "type" : "object"
   },
@@ -2472,7 +2473,7 @@ Successful result:
       },
       "bindings" : {
         "items" : {
-          "$ref" : "#/$defs/Binding"
+          "$ref" : "#/$defs/LegacyBinding"
         },
         "type" : "array"
       },
@@ -2489,7 +2490,7 @@ Successful result:
         "type" : "boolean"
       },
       "mouseTuning" : {
-        "$ref" : "#/$defs/Tuning"
+        "$ref" : "#/$defs/LegacyTuning"
       },
       "snappingModuleEnabled" : {
         "type" : "boolean"
@@ -2498,7 +2499,7 @@ Successful result:
         "type" : "boolean"
       },
       "trackpadTuning" : {
-        "$ref" : "#/$defs/Tuning"
+        "$ref" : "#/$defs/LegacyTuning"
       },
       "version" : {
         "enum" : [
@@ -2536,7 +2537,7 @@ Successful result:
       },
       "bindings" : {
         "items" : {
-          "$ref" : "#/$defs/Binding"
+          "$ref" : "#/$defs/LegacyBinding"
         },
         "type" : "array"
       },
@@ -2553,14 +2554,21 @@ Successful result:
         "type" : "boolean"
       },
       "mouseTuning" : {
-        "$ref" : "#/$defs/Tuning"
+        "$ref" : "#/$defs/LegacyTuning"
       },
       "snappingModuleEnabled" : {
         "type" : "boolean"
       },
       "stacks" : {
         "items" : {
-          "$ref" : "#/$defs/GestureStack"
+          "additionalProperties" : true,
+          "properties" : {
+
+          },
+          "required" : [
+
+          ],
+          "type" : "object"
         },
         "type" : "array"
       },
@@ -2568,11 +2576,91 @@ Successful result:
         "type" : "boolean"
       },
       "trackpadTuning" : {
-        "$ref" : "#/$defs/Tuning"
+        "$ref" : "#/$defs/LegacyTuning"
       },
       "version" : {
         "enum" : [
           5
+        ],
+        "type" : "integer"
+      },
+      "visualFeedbackEnabled" : {
+        "type" : "boolean"
+      },
+      "windowSwitcher" : {
+        "$ref" : "#/$defs/WindowSwitcher"
+      }
+    },
+    "required" : [
+      "version",
+      "bindings"
+    ],
+    "type" : "object"
+  },
+  "Version6AppConfiguration" : {
+    "additionalProperties" : false,
+    "properties" : {
+      "applicationGroups" : {
+        "items" : {
+          "$ref" : "#/$defs/ApplicationGroup"
+        },
+        "type" : "array"
+      },
+      "automations" : {
+        "items" : {
+          "$ref" : "#/$defs/Automation"
+        },
+        "type" : "array"
+      },
+      "bindings" : {
+        "items" : {
+          "$ref" : "#/$defs/LegacyBinding"
+        },
+        "type" : "array"
+      },
+      "coffeeModuleEnabled" : {
+        "type" : "boolean"
+      },
+      "displayModuleEnabled" : {
+        "type" : "boolean"
+      },
+      "hapticPattern" : {
+        "$ref" : "#/$defs/Haptic"
+      },
+      "hapticsInPractice" : {
+        "type" : "boolean"
+      },
+      "mouseTuning" : {
+        "$ref" : "#/$defs/LegacyTuning"
+      },
+      "powerModuleEnabled" : {
+        "type" : "boolean"
+      },
+      "snappingModuleEnabled" : {
+        "type" : "boolean"
+      },
+      "stacks" : {
+        "items" : {
+          "additionalProperties" : true,
+          "properties" : {
+
+          },
+          "required" : [
+
+          ],
+          "type" : "object"
+        },
+        "type" : "array"
+      },
+      "trackpadModuleEnabled" : {
+        "type" : "boolean"
+      },
+      "trackpadTuning" : {
+        "$ref" : "#/$defs/LegacyTuning"
+      },
+      "version" : {
+        "enum" : [
+          6
         ],
         "type" : "integer"
       },

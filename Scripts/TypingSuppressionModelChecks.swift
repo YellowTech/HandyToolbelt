@@ -11,24 +11,23 @@ import HandyToolbeltCore
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Typing-checks-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        var keys: [(CGKeyCode, Bool)] = []
-        let keyboard = StackKeyboardDriver(physicalModifiers: [], emit: { key, down, _, _ in keys.append((key, down)) })
+        let keyboard = GestureKeyboardMonitor()
         var physicalDowns = 0
         keyboard.onPhysicalKeyDown = { physicalDowns += 1 }
         keyboard.routeKeyboardEvent(type: .flagsChanged, key: 56, flags: .maskShift, marker: 0)
         keyboard.routeKeyboardEvent(type: .keyDown, key: 56, flags: .maskShift, marker: 0)
-        keyboard.routeKeyboardEvent(type: .keyDown, key: 0, flags: [], marker: StackKeyboardDriver.eventMarker)
         keyboard.routeKeyboardEvent(type: .keyDown, key: 0, flags: [], marker: ActionExecutor.eventMarker)
-        check(physicalDowns == 0, "Native routing excludes modifiers and both synthetic event markers")
+        keyboard.routeKeyboardEvent(type: .flagsChanged, key: 55, flags: .maskCommand, marker: ActionExecutor.eventMarker)
+        check(keyboard.physicalModifiers == [.shift], "Only hardware modifier transitions update matching")
+        check(physicalDowns == 0, "Native routing excludes modifiers and app-generated keyboard events")
         keyboard.routeKeyboardEvent(type: .keyDown, key: 0, flags: [], marker: 0)
         keyboard.routeKeyboardEvent(type: .keyDown, key: 0, flags: [], marker: 0)
         check(physicalDowns == 2, "Physical keydown and repeat both refresh suppression")
         keyboard.routeKeyboardEvent(type: .flagsChanged, key: 56, flags: [], marker: 0)
         let model = AppModel(storage: ConfigurationStore(url: directory.appendingPathComponent("config.json")), nativeInputEnabled: false,
-            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { true }, stackKeyboard: keyboard,
+            observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { true }, keyboardMonitor: keyboard,
             focusedApplication: { ("com.example.Editor", 100, "Private app name") })
         model.configuration.trackpadModuleEnabled = true
-        model.configuration.stacks = []
         model.configuration.bindings = [.init(gesture: .init(kind: .tap, fingers: 3), action: .init(kind: .showText, text: "private action")),
             .init(gesture: .init(kind: .doubleTap, fingers: 3), action: .init(kind: .showText, text: "double"))]
         var output = [String]()
@@ -46,9 +45,6 @@ import HandyToolbeltCore
         RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         check(output.isEmpty, "Typing cancels pending temporal dispatch")
         check(!model.physicalClick(at: now + 0.1), "Typing blocks native clicks")
-        model.stackRuntime.begin(GestureStack(startActions: [.init(kind: .holdModifiers, modifiers: [.option])]), deviceID: device.id, fingerID: 1, time: now, tuning: GestureTuning(), aspect: 1.6)
-        model.physicalKeyDown(at: now)
-        check(keys.contains { $0.0 == 58 && !$0.1 }, "Typing releases stack-owned modifiers")
         model.configuration.bindings = [model.configuration.bindings[0]]
         model.receive(device, points, now + 0.2)
         model.receive(device, [], now + 0.1) // queued stale lift must not rearm
