@@ -25,7 +25,7 @@ final class ScreenCaptureWindowPreviewCapture: WindowPreviewCapturing {
     func hasPermission() -> Bool { CGPreflightScreenCaptureAccess() }
     func requestPermission() { _ = CGRequestScreenCaptureAccess() }
     func loadWindows(completion: @escaping (Result<[WindowPreviewCandidate], Error>) -> Void) {
-        SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { [weak self] content, error in
+        SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: false) { [weak self] content, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error { completion(.failure(error)); return }

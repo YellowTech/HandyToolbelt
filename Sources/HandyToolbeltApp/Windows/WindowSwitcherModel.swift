@@ -121,7 +121,7 @@ final class WindowSwitcherModel: ObservableObject {
                     self.refreshAvailability()
                     self.catalog.noteFocus(processID: app.processIdentifier)
                 })
-                for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+                for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
                     observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.catalog.applicationsChanged() })
                 }
                 for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {

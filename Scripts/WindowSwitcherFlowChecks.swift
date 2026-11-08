@@ -329,6 +329,38 @@ private final class SnapListener: WindowSnappingMonitoring {
             check(WindowCatalog.visibleWindowEvidence(rows: [invalid]).isEmpty,
                   "Production metadata adapter excludes negative layers transparent and invalid windows")
         }
+        func serverWindow(_ id: UInt32, pid: pid_t = 20, onScreen: Bool = false, layer: Int = 0) -> [String: Any] {
+            var row = metadataRow
+            row[kCGWindowNumber as String] = id
+            row[kCGWindowOwnerPID as String] = pid
+            row[kCGWindowIsOnscreen as String] = onScreen
+            row[kCGWindowLayer as String] = layer
+            return row
+        }
+        let inventory = OtherSpaceWindows.Inventory(rows: [
+            serverWindow(101), serverWindow(102), serverWindow(103, onScreen: true), serverWindow(103),
+            serverWindow(104, pid: 21), serverWindow(105, layer: 8)
+        ], livePIDs: [20], assignedWindows: [101, 103, 104, 105])
+        check(inventory.offscreenByProcess[20] == [101] && inventory.offscreenByProcess[21] == nil,
+              "Only assigned off-screen windows for live apps are recoverable, excluding inactive tabs and auxiliary layers")
+        var search = OtherSpaceWindows.Search()
+        var inspected: [UInt64] = []
+        func readCandidate(_ id: UInt64) -> (UInt32, String)? {
+            inspected.append(id)
+            switch id {
+            case 1: return (101, "descendant")
+            case 3: return (102, "unassigned")
+            case 5: return (101, "window")
+            default: return nil
+            }
+        }
+        let firstSlice = search.find(missing: [101], limit: 10, mayRead: { inspected.count < 3 },
+                                     candidate: readCandidate, isWindow: { $0 == "window" })
+        check(firstSlice.isEmpty && search.nextID == 3, "Recovery stops at the deadline and rejects descendants with matching native IDs")
+        let nextSlice = search.find(missing: [101], limit: 10, mayRead: { true },
+                                    candidate: readCandidate, isWindow: { $0 == "window" })
+        check(nextSlice == [101: "window"] && inspected == [0, 1, 2, 3, 4, 5],
+              "Recovery resumes its bounded sweep, skips unrelated windows and stops at the exact AX root")
         // Exercise the exact production native-read boundary without remote UI reads or real delays.
         var readEvents: [(Int, WindowCatalog.EligibilityAttribute)] = []
         var fakeTime: TimeInterval = 0
@@ -339,7 +371,7 @@ private final class SnapListener: WindowSnappingMonitoring {
         var standardIndices: Set<Int> = [0, 1]
         var visibleReads = 0
         func collect(count: Int, focused: Int? = nil, budget: WindowCatalog.EligibilityReadBudget = .init(), appQueries: Int = 512,
-                     appDuration: TimeInterval = 0.3) -> WindowCatalog.EligibilityCollection {
+                     appDuration: TimeInterval = 0.3, offscreen: Set<Int> = []) -> WindowCatalog.EligibilityCollection {
             WindowCatalog.collectEligibility(count: count, processID: 20, focusedIndex: focused,
                 current: { collectionCurrent }, now: { fakeTime }, budget: budget,
                 maximumAppQueries: appQueries, maximumAppDuration: appDuration,
@@ -355,7 +387,8 @@ private final class SnapListener: WindowSnappingMonitoring {
                     case .main: return false
                     case .minimized: return minimizedStandard
                     }
-                }, visible: { visibleReads += 1; return [.init(processID: 20, frame: frame)] })
+                }, visible: { visibleReads += 1; return [.init(processID: 20, frame: frame)] },
+                offscreen: offscreen.contains)
         }
         let standardOnly = collect(count: 2)
         check(standardOnly.indices == [0, 1] && !standardOnly.incomplete && readEvents.count == 4 && visibleReads == 0,
@@ -379,6 +412,10 @@ private final class SnapListener: WindowSnappingMonitoring {
         check(firstApp.indices == [0] && !firstApp.incomplete && secondApp.incomplete && readEvents.count == 3,
               "Cumulative budget spans applications and stops after at most one in-flight read overshoot")
         readEvents = []; readDuration = 0; standardIndices = [0]
+        let exactOtherSpace = collect(count: 2, offscreen: [0])
+        check(exactOtherSpace.indices == [0, 1],
+              "An exact off-Space match does not claim the visible evidence of another window with the same geometry")
+        readEvents = []; visibleReads = 0
         let partialEnrichment = collect(count: 2, appQueries: 6)
         check(partialEnrichment.indices == [0] && partialEnrichment.incomplete && readEvents.count == 6 && visibleReads == 0,
               "Abandoned enrichment keeps standards and rejects fallback rather than using partial reservations")
