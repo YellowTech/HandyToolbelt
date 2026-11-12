@@ -2,31 +2,40 @@ import XCTest
 @testable import HandyToolbeltCore
 
 final class TypingAndDebugTests: XCTestCase {
-    func testTypingCooldownAndLiftBarrier() {
+    func testTypingCooldownExpiresAndAutorepeatExtendsIt() {
         var policy = TypingSuppression()
         policy.keyDown(at: 10, synthetic: true)
         policy.keyDown(at: 10, modifier: true)
         XCTAssertFalse(policy.coolingDown(at: 10))
         policy.keyDown(at: 10)
         XCTAssertTrue(policy.coolingDown(at: 10.49))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: true, at: 10.1))
         policy.keyDown(at: 10.4) // autorepeat extends the deadline
         XCTAssertTrue(policy.coolingDown(at: 10.8))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: true, at: 11))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: false, at: 11.1))
-        XCTAssertFalse(policy.suppresses(deviceID: 1, hasContacts: true, at: 11.2))
-        XCTAssertFalse(policy.suppresses(deviceID: 2, hasContacts: true, at: 11.2))
+        policy.keyDown(at: 10.1)
+        policy.keyDown(at: .infinity)
+        XCTAssertEqual(policy.deadline, 10.9)
+        XCTAssertFalse(policy.coolingDown(at: 10.9))
     }
-    func testInvalidAndStaleLiftsPreserveTypingBarrier() {
-        var policy = TypingSuppression()
-        policy.keyDown(at: 10)
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: true, at: 10.2))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: false, at: 10.1))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: false, at: .nan))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: false, at: .infinity))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: true, at: 10.6))
-        XCTAssertTrue(policy.suppresses(deviceID: 1, hasContacts: false, at: 10.7))
-        XCTAssertFalse(policy.suppresses(deviceID: 1, hasContacts: true, at: 10.8))
+
+    func testTypingCancelsPendingAndActiveTipsWithSameRestingFinger() {
+        var recognizer = GestureRecognizer()
+        let anchor = Contact(id: 3, x: 0.4, y: 0.5)
+        let tapper = Contact(id: 4, x: 0.6, y: 0.5)
+        let double = GestureSpec(kind: .doubleTipTapRight, fingers: 2)
+        _ = recognizer.process([anchor], at: 9.0)
+        _ = recognizer.process([anchor], at: 9.18)
+        _ = recognizer.process([anchor, tapper], at: 9.19, eligibleTemporalSpecs: [double])
+        XCTAssertTrue(recognizer.process([anchor], at: 9.23, eligibleTemporalSpecs: [double]).isEmpty)
+        XCTAssertNotNil(recognizer.nextDeadline)
+        _ = recognizer.process([anchor, tapper], at: 9.25, eligibleTemporalSpecs: [double])
+        recognizer.suppressRecognitionForTyping()
+        XCTAssertNil(recognizer.nextDeadline)
+        XCTAssertEqual(recognizer.feedback.phase, .idle)
+        XCTAssertEqual(recognizer.contacts, [anchor, tapper])
+        XCTAssertTrue(recognizer.process([anchor, tapper], at: 9.5, typingSuppressed: true).isEmpty)
+        XCTAssertTrue(recognizer.process([anchor], at: 9.77).isEmpty)
+        XCTAssertTrue(recognizer.process([anchor, tapper], at: 9.78).isEmpty)
+        XCTAssertEqual(recognizer.process([anchor], at: 9.83), [.init(kind: .tipTapRight, fingers: 2)])
     }
     func testRingCapacityTimeAndPayloadBounds() throws {
         var buffer = DebugEventBuffer(capacity: 3)

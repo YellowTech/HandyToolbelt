@@ -74,6 +74,7 @@ public struct GestureRecognizer {
     private var tracks: [Int: Track] = [:]
     private var chord: Chord?
     private var tip: Tip?
+    private var chordSuppressedUntilRelease = false
     private var waitForRelease = false
     private var lastTime: Double?
     private var lastClick: Double = -.infinity
@@ -101,6 +102,14 @@ public struct GestureRecognizer {
         chord?.temporalSpecs = []
         chord?.cancelled = true
     }
+    /// Keep stationary-finger history, while discarding gestures that overlap typing.
+    public mutating func suppressRecognitionForTyping() {
+        cancelTemporalGestures()
+        tip = nil
+        chordSuppressedUntilRelease = !contacts.isEmpty
+        feedback = DetectionFeedback()
+        feedback.fingerCount = contacts.count
+    }
     /// Only deferred single taps use deadlines. Holds always require a fresh hardware frame.
     public mutating func advanceTime(to time: Double) -> [GestureSpec] {
         guard time.isFinite else { return [] }
@@ -119,11 +128,12 @@ public struct GestureRecognizer {
 
     public mutating func reset() {
         pendingTip = nil; tracks = [:]; contacts = []; chord = nil; tip = nil; pendingTap = nil
-        waitForRelease = false; lastTime = nil
+        chordSuppressedUntilRelease = false; waitForRelease = false; lastTime = nil
         feedback = DetectionFeedback()
     }
 
-    public mutating func process(_ input: [Contact], at time: Double, physicalButtonDown: Bool = false, eligibleTemporalSpecs: Set<GestureSpec> = []) -> [GestureSpec] {
+    public mutating func process(_ input: [Contact], at time: Double, physicalButtonDown: Bool = false, eligibleTemporalSpecs: Set<GestureSpec> = [],
+                                 typingSuppressed: Bool = false) -> [GestureSpec] {
         guard time.isFinite else { reset(); return [] }
         if let lastTime, time < lastTime || time - lastTime > 0.8 { reset() }
         lastTime = time
@@ -146,6 +156,16 @@ public struct GestureRecognizer {
             t.position = contact.position
             t.travel = max(t.travel, t.start.distance(to: contact.position))
             tracks[contact.id] = t
+        }
+        defer {
+            tracks = tracks.filter { ids.contains($0.key) }
+            if ids.isEmpty {
+                waitForRelease = false; chordSuppressedUntilRelease = false; chord = nil; tip = nil
+            }
+        }
+        if typingSuppressed {
+            suppressRecognitionForTyping()
+            return []
         }
         // A second touch reserves the first tap only if its onset is inside the window.
         if var pending = pendingTap, pending.secondBegan == nil, old.isEmpty, !ids.isEmpty, time <= pending.deadline {
@@ -287,11 +307,11 @@ public struct GestureRecognizer {
                     (feedback.holdTime >= tuning.anchorHold ? "Resting finger ready. Tap on either side." : "Hold the resting finger a little longer…")
             }
             if !events.isEmpty || tip != nil { pendingTap = nil }
-            if chord == nil && !ids.isEmpty {
+            if !chordSuppressedUntilRelease && chord == nil && !ids.isEmpty {
                 chord = Chord(began: time, origins: [:], peakSince: time, temporalSpecs: eligibleTemporalSpecs)
                 if tip != nil || events.contains(where: { $0.kind.isAnchored }) { chord?.cancelled = true }
             }
-            if var group = chord {
+            if !chordSuppressedUntilRelease, var group = chord {
                 if !Set(group.origins.keys).isSubset(of: ids) { group.lostMembers = true }
                 if group.lostMembers && !ids.isSubset(of: Set(group.origins.keys)) { group.cancelled = true }
                 for id in ids {
@@ -365,8 +385,6 @@ public struct GestureRecognizer {
                 } else { chord = group }
             }
         }
-        tracks = tracks.filter { ids.contains($0.key) }
-        if ids.isEmpty { waitForRelease = false; chord = nil; tip = nil }
         for event in events {
             feedback.gesture = event
             report(.recognized, event.title)

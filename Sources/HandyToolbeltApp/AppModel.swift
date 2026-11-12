@@ -127,13 +127,14 @@ final class AppModel: ObservableObject {
     private var typingSuppression = TypingSuppression()
 
     func physicalKeyDown(at time: Double = ProcessInfo.processInfo.systemUptime) {
+        guard time.isFinite else { return }
         typingSuppression.keyDown(at: time)
-        for (id, recognizer) in recognizers where !recognizer.contacts.isEmpty { typingSuppression.requireLift(deviceID: id) }
         DebugEventRecorder.shared.record(category: .keyboard, event: "physical_key_down")
         DebugEventRecorder.shared.record(category: .suppression, event: "typing_cooldown")
         cancelPendingGestures()
         cancelVisualFeedback()
-        recognizers.removeAll()
+        for id in recognizers.keys { recognizers[id]?.suppressRecognitionForTyping() }
+        calibration?.cancelAttempt()
     }
 
     private func cancelPendingGestures() {
@@ -531,11 +532,12 @@ final class AppModel: ObservableObject {
         isCalibrating = false; calibration = nil; calibrationDeviceID = nil
     }
 
-    private func train(_ points: [Contact], device: TouchDevice, time: Double, pressed: Bool) {
+    private func train(_ points: [Contact], device: TouchDevice, time: Double, pressed: Bool, typingSuppressed: Bool = false) {
         guard isCalibrating, frontmostBundleID == Bundle.main.bundleIdentifier else { return }
         if calibrationDeviceID == nil && !points.isEmpty { calibrationDeviceID = device.id }
         guard calibrationDeviceID == device.id, var trainer = calibration else { return }
-        let outcome = trainer.process(points, at: time, aspectRatio: device.aspectRatio, physicalButtonDown: pressed)
+        let outcome = trainer.process(points, at: time, aspectRatio: device.aspectRatio, physicalButtonDown: pressed,
+            typingSuppressed: typingSuppressed)
         calibration = trainer
         guard let outcome else { return }
         switch outcome {
@@ -888,14 +890,12 @@ final class AppModel: ObservableObject {
             trackpadContactAdmission.removeValue(forKey: device.id)
             points = rawPoints
         }
-        if typingSuppression.suppresses(deviceID: device.id, hasContacts: !points.isEmpty, at: time) {
-            recognizers[device.id] = nil
-            if points.isEmpty { liftRequired.remove(device.id) }
-            if previewVisible && device.kind == selectedDevice {
+        let typingSuppressed = typingSuppression.coolingDown(at: time)
+        defer {
+            if typingSuppressed && previewVisible && device.kind == selectedDevice {
                 touchVisualization.submit(GymSnapshot(contacts: points), deviceID: device.id, at: time)
                 if contacts.map(\.id) != points.map(\.id) { contacts = points }
             }
-            return
         }
         nativePresses.validate { $0.contacts.accepts(deviceID: device.id, contacts: points, at: time) }
 
@@ -920,12 +920,18 @@ final class AppModel: ObservableObject {
         recognizer.tuning = tuning
         recognizer.surfaceAspectRatio = device.aspectRatio
         let previousSequence = recognizer.feedbackSequence
-        let pressed = nativeInputEnabled && (0...2).contains { CGEventSource.buttonState(.combinedSessionState, button: CGMouseButton(rawValue: UInt32($0))!) }
+        let pressed = !typingSuppressed && nativeInputEnabled && (0...2).contains { CGEventSource.buttonState(.combinedSessionState, button: CGMouseButton(rawValue: UInt32($0))!) }
         let events = recognizer.process(points, at: time, physicalButtonDown: pressed,
-            eligibleTemporalSpecs: recognitionTemporalSpecs(for: device.kind))
+            eligibleTemporalSpecs: typingSuppressed ? [] : recognitionTemporalSpecs(for: device.kind), typingSuppressed: typingSuppressed)
         if recognizer.feedbackSequence != previousSequence { DebugEventRecorder.shared.feedback(recognizer.feedback) }
         recognizers[device.id] = recognizer
         scheduleTemporalDeadline(for: device.id)
+        if typingSuppressed {
+            if gymActive && previewVisible && device.kind == selectedDevice {
+                train(points, device: device, time: time, pressed: false, typingSuppressed: true)
+            }
+            return
+        }
         let windowVisible = previewVisible
         if gymActive && windowVisible && device.kind == selectedDevice {
             train(points, device: device, time: time, pressed: pressed)

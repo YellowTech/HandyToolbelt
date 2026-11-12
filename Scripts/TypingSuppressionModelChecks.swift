@@ -29,37 +29,54 @@ import HandyToolbeltCore
             focusedApplication: { ("com.example.Editor", 100, "Private app name") })
         model.configuration.trackpadModuleEnabled = true
         model.configuration.bindings = [.init(gesture: .init(kind: .tap, fingers: 3), action: .init(kind: .showText, text: "private action")),
-            .init(gesture: .init(kind: .doubleTap, fingers: 3), action: .init(kind: .showText, text: "double"))]
+            .init(gesture: .init(kind: .doubleTap, fingers: 3), action: .init(kind: .showText, text: "double")),
+            .init(gesture: .init(kind: .tipTapRight, fingers: 2), action: .init(kind: .showText, text: "anchored tap")),
+            .init(gesture: .init(kind: .tipSwipeRight, fingers: 2), action: .init(kind: .showText, text: "anchored swipe"))]
         var output = [String]()
         model.onShowText = { output.append($0.text) }
         model.start(); defer { model.stop() }
         let device = TouchDevice(id: 998877, kind: .trackpad, name: "Private device name", aspectRatio: 1.6, hasMeasuredAspect: true, supportsForce: false)
-        model.devices = [device]
+        let anchoredDevice = TouchDevice(id: 998878, kind: .trackpad, name: "Second trackpad", aspectRatio: 1.6, hasMeasuredAspect: true, supportsForce: false)
+        model.devices = [device, anchoredDevice]
         let points = [Contact(id: 1, x: 0.4, y: 0.5), Contact(id: 2, x: 0.5, y: 0.5), Contact(id: 3, x: 0.6, y: 0.5)]
+        let anchor = Contact(id: 3, x: 0.4, y: 0.5)
+        let tapper = Contact(id: 4, x: 0.6, y: 0.5)
+        let movedTapper = Contact(id: 4, x: 0.76, y: 0.5)
         let now = ProcessInfo.processInfo.systemUptime
         model.receive(device, points, now)
         model.receive(device, points, now + 0.03)
         model.receive(device, [], now + 0.06) // delayed single tap
-        model.physicalKeyDown(at: now)
+        model.physicalKeyDown(at: now + 0.08)
         model.finishTemporalGestures(for: device.id, at: now + 0.6)
         RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         check(output.isEmpty, "Typing cancels pending temporal dispatch")
         check(!model.physicalClick(at: now + 0.1), "Typing blocks native clicks")
-        model.configuration.bindings = [model.configuration.bindings[0]]
-        model.receive(device, points, now + 0.2)
-        model.receive(device, [], now + 0.1) // queued stale lift must not rearm
+        model.configuration.bindings.remove(at: 1)
+        model.receive(device, points, now + 0.53)
+        model.receive(device, [], now + 0.51) // queued stale lift must not rearm
         model.receive(device, [], .nan)
         model.receive(device, [], .infinity)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.51))
-        model.receive(device, points, now + 0.6)
-        model.receive(device, [], now + 0.7)
+        model.receive(anchoredDevice, [anchor], now + 0.25)
+        model.receive(anchoredDevice, [anchor, tapper], now + 0.55)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.59))
+        model.receive(anchoredDevice, [anchor, movedTapper], now + 0.60)
+        model.receive(anchoredDevice, [anchor], now + 0.62)
+        model.receive(device, points, now + 0.65)
+        model.receive(device, [], now + 0.70)
         RunLoop.main.run(until: Date().addingTimeInterval(0.01))
-        check(output.isEmpty, "Held fingers cannot fire when typing cooldown expires")
+        check(output.isEmpty, "Tip gestures and ordinary chords begun during cooldown cannot fire after it")
+        model.receive(anchoredDevice, [anchor, tapper], now + 0.63)
+        model.receive(anchoredDevice, [anchor], now + 0.69)
+        model.receive(anchoredDevice, [anchor, tapper], now + 0.73)
+        model.receive(anchoredDevice, [anchor, movedTapper], now + 0.77)
+        model.receive(anchoredDevice, [anchor], now + 0.79)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        check(output == ["anchored tap", "anchored swipe"], "A continuously held anchor supports fresh taps and swipes immediately after cooldown")
         model.receive(device, points, now + 0.8)
         model.receive(device, points, now + 0.83)
         model.receive(device, [], now + 0.86)
         RunLoop.main.run(until: Date().addingTimeInterval(0.01))
-        check(output == ["private action"], "Fresh gesture after a full lift rearms recognition")
+        check(output == ["anchored tap", "anchored swipe", "private action"], "A fresh ordinary gesture is recognized after a full lift")
         let recorder = DebugEventRecorder.shared
         recorder.setEnabled(true)
         recorder.touch(deviceID: device.id, contacts: points)

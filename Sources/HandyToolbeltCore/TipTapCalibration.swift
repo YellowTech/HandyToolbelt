@@ -48,7 +48,12 @@ public struct TipTapCalibration {
     public var isComplete: Bool { leftCount >= 3 && rightCount >= 3 }
     public var nextDirection: GestureKind { leftCount < 3 ? .tipTapLeft : .tipTapRight }
 
-    public mutating func process(_ contacts: [Contact], at time: Double, aspectRatio: Double, physicalButtonDown: Bool = false) -> Outcome? {
+    public mutating func cancelAttempt() {
+        attempt = nil
+    }
+
+    public mutating func process(_ contacts: [Contact], at time: Double, aspectRatio: Double, physicalButtonDown: Bool = false,
+                                 typingSuppressed: Bool = false) -> Outcome? {
         guard !isComplete else { return nil }
         let ids = Set(contacts.map(\.id))
         guard time.isFinite, ids.count == contacts.count, contacts.count <= 10,
@@ -66,6 +71,10 @@ public struct TipTapCalibration {
             tracks[contact.id] = t
         }
         defer { tracks = tracks.filter { ids.contains($0.key) } }
+        if typingSuppressed {
+            cancelAttempt()
+            return nil
+        }
         if attempt == nil, ids.count == 2, added.count == 1,
            let tapperID = added.first, let anchorID = ids.subtracting(added).first,
            let anchor = old[anchorID], let tapper = tracks[tapperID] {
