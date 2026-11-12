@@ -26,6 +26,10 @@ final class DebugEventRecorder {
         guard enabled else { return }
         buffer.append(category: category, event: event, fields: fields, at: ProcessInfo.processInfo.systemUptime)
     }
+    func switcher(_ event: String, fields: @autoclosure () -> [String: String] = [:]) {
+        guard isEnabled else { return }
+        record(category: .switcher, event: event, fields: fields())
+    }
     func touch(deviceID: UInt64, contacts: [Contact], kind: InputDevice? = nil, aspectRatio: Double? = nil, frameTime: Double? = nil) {
         lock.lock(); defer { lock.unlock() }
         guard enabled else { return }

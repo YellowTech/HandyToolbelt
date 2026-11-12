@@ -170,9 +170,66 @@ private final class SnapListener: WindowSnappingMonitoring {
 
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("Switcher-flow-\(UUID())")
         defer { try? FileManager.default.removeItem(at: temporary) }
+        let hidMonitor = GestureKeyboardMonitor()
         let trackpad = AppModel(storage: ConfigurationStore(url: temporary.appendingPathComponent("settings.json")),
             nativeInputEnabled: false, observeSession: false, sessionIsActive: { true }, accessibilityTrusted: { true },
+            keyboardMonitor: hidMonitor,
             focusedApplication: { ("test.editor", 10, "Editor") })
+        // Exercise both keyboard stages with Gestures disabled and no native taps.
+        struct Export: Decodable { let context: [String: String]; let events: [DebugEvent] }
+        let recorder = DebugEventRecorder.shared
+        func export() throws -> Export { try JSONDecoder().decode(Export.self, from: recorder.snapshot()) }
+        func commandTab() -> Bool {
+            hidMonitor.routeKeyboardEvent(type: .keyDown, key: 48, flags: .maskCommand, marker: 0)
+            let consumed = event(monitor, key: 48, flags: .maskCommand)
+            _ = event(monitor, key: 48, down: false, flags: .maskCommand)
+            return consumed
+        }
+        var diagnosticSettings = settings
+        diagnosticSettings.shortcut = .commandTab
+        trackpad.configuration.trackpadModuleEnabled = false
+        trackpad.configuration.windowSwitcher = diagnosticSettings
+        trackpad.switcherDebugContext = { [weak model] in model?.debugContext ?? [:] }
+        model.configure(diagnosticSettings)
+        recorder.setEnabled(false)
+        check(commandTab(), "Diagnostics disabled preserves Command-Tab consumption")
+        let disabled = try export()
+        check(disabled.events.isEmpty, "Diagnostics disabled does not record the shortcut")
+        model.cancel(); catalog.deliver()
+        recorder.setEnabled(true)
+        hidMonitor.routeKeyboardEvent(type: .keyDown, key: 0, flags: .maskCommand, marker: 0)
+        hidMonitor.routeKeyboardEvent(type: .keyDown, key: 48, flags: .maskAlternate, marker: 0)
+        hidMonitor.routeKeyboardEvent(type: .keyDown, key: 48, flags: .maskCommand, marker: ActionExecutor.eventMarker)
+        check(!event(monitor, key: 48, flags: .maskCommand, marker: ActionExecutor.eventMarker),
+              "Marked Command-Tab bypasses session routing and diagnostics")
+        check(commandTab() && model.isShowing, "Configured shortcut is consumed while recording diagnostics")
+        catalog.deliver(); model.confirm()
+        check(!commandTab() && !model.isShowing, "Pending activation passes the matched shortcut through")
+        let pending = try export()
+        check(pending.context["switcher_shortcut"] == "commandTab" && pending.context["switcher_activation_pending"] == "true" &&
+              pending.context["switcher_keyboard_available"] == "true" && pending.context["switcher_session_tap_enabled"] == "false",
+              "Export shows the semantic setting, model readiness and actual tap status")
+        catalog.drain()
+        model.setRecordingShortcut(true)
+        check(!commandTab(), "Recording a shortcut passes it through")
+        model.setRecordingShortcut(false)
+        let captured = try export().events.filter { $0.category == .switcher }
+        check(captured.filter { $0.event == "hid_shortcut" }.map(\.fields) == [[:], [:], [:]],
+              "HID diagnostics identify only the configured unmarked chord without key metadata")
+        check(captured.filter { $0.event == "session_shortcut" }.map(\.fields) == [
+            ["operation": "begin", "outcome": "consumed", "reason": "accepted"],
+            ["operation": "begin", "outcome": "passed", "reason": "declined"],
+            ["outcome": "passed", "reason": "shortcut_recording"]
+        ], "Session diagnostics distinguish consumed, declined and suspended shortcuts")
+        check(captured.contains { $0.event == "shortcut_declined" && $0.fields == ["reason": "activation_pending"] } &&
+              captured.contains { $0.event == "chooser_opened" } &&
+              captured.contains { $0.event == "activation_finished" && $0.fields == ["outcome": "succeeded"] },
+              "Chooser and activation diagnostics explain why the second shortcut passed through")
+        recorder.setEnabled(false)
+        let cleared = try export()
+        check(cleared.events.isEmpty, "Disabling diagnostics clears previously recorded events")
+        model.configure(settings)
+        catalog.frontmost = 10
         // Real dispatch classifies all switcher failures without losing the error result.
         let actionExecutor = ActionExecutor(accessibilityTrusted: { true })
         let windowAction = GestureAction(kind: .system, system: .nextWindow)

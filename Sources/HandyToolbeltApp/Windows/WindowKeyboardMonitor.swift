@@ -14,23 +14,33 @@ final class WindowKeyboardMonitor {
     private var consumedKeys = Set<UInt16>()
     private var shiftHeld = false
     private var pendingShiftTap = false
+    var tapEnabled: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
 
     func start() -> Bool {
         guard tap == nil else { return true }
         let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-                                        eventsOfInterest: mask, callback: Self.callback, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
+                                        eventsOfInterest: mask, callback: Self.callback, userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            DebugEventRecorder.shared.switcher("tap_start",
+                fields: ["tap": "session", "created": "false", "enabled": "false"])
+            return false
+        }
         shiftHeld = CGEventSource.flagsState(.combinedSessionState).contains(.maskShift)
         self.tap = tap
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         self.source = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        DebugEventRecorder.shared.switcher("tap_start",
+            fields: ["tap": "session", "created": "true", "enabled": String(tapEnabled)])
         return true
     }
     func stop() {
-        if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap)
+            DebugEventRecorder.shared.switcher("tap_stop", fields: ["tap": "session"])
+        }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil; source = nil; chooserOpen = false; consumedKeys = []; commitOnRelease = false; shiftHeld = false
     }
@@ -43,9 +53,13 @@ final class WindowKeyboardMonitor {
     // Returns whether a key event was consumed. Modifier events always pass through.
     func handle(type: CGEventType, event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            DebugEventRecorder.shared.switcher("tap_disabled",
+                fields: ["tap": "session", "reason": type == .tapDisabledByTimeout ? "timeout" : "user_input"])
             pendingShiftTap = false
             _ = onCommand?(.cancel)
             if let tap = tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            DebugEventRecorder.shared.switcher("tap_recovery",
+                fields: ["tap": "session", "enabled": String(tapEnabled)])
             return false
         }
         // Ignore app-generated shortcuts to prevent feedback loops.
@@ -54,7 +68,15 @@ final class WindowKeyboardMonitor {
         let wasShiftHeld = shiftHeld
         if type == .flagsChanged { shiftHeld = event.flags.contains(.maskShift) }
         if type == .keyUp, consumedKeys.remove(key) != nil { pendingShiftTap = false; return true }
-        guard !suspended else { pendingShiftTap = false; return false }
+        guard !suspended else {
+            pendingShiftTap = false
+            if type == .keyDown, DebugEventRecorder.shared.isEnabled,
+               shortcut.matches(keyCode: key, flags: event.flags.rawValue) {
+                DebugEventRecorder.shared.switcher("session_shortcut",
+                    fields: ["outcome": "passed", "reason": "shortcut_recording"])
+            }
+            return false
+        }
         if type == .flagsChanged {
             if chooserOpen && commitOnRelease && !shortcut.isHeld(flags: event.flags.rawValue) {
                 pendingShiftTap = false
@@ -78,8 +100,18 @@ final class WindowKeyboardMonitor {
         let reverse = event.flags.contains(.maskShift)
         var command: Command?
         if shortcut.matches(keyCode: key, flags: event.flags.rawValue) {
-            command = chooserOpen ? .step(reverse ? -1 : 1) : .begin(reverse: reverse)
-        } else if chooserOpen {
+            let stepping = chooserOpen
+            let handler = onCommand
+            let consumed = handler?(stepping ? .step(reverse ? -1 : 1) : .begin(reverse: reverse)) == true
+            DebugEventRecorder.shared.switcher("session_shortcut", fields: [
+                "operation": stepping ? "step" : "begin",
+                "outcome": consumed ? "consumed" : "passed",
+                "reason": consumed ? "accepted" : (handler == nil ? "no_handler" : "declined")
+            ])
+            if consumed { consumedKeys.insert(key) }
+            return consumed
+        }
+        if chooserOpen {
             switch key {
             case 48: command = .step(reverse ? -1 : 1)
             case 123: command = .step(-1)

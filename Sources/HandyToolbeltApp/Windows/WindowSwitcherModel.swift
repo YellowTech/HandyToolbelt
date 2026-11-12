@@ -43,6 +43,18 @@ final class WindowSwitcherModel: ObservableObject {
     private var initialDirection = 1
     private var switching = false
     private var refreshingOpenChooser = false
+    private enum CloseReason: String {
+        case cancelled, confirmed
+        case focusChanged = "focus_changed"
+        case noSelection = "no_selection"
+    }
+
+    var debugContext: [String: String] {
+        ["switcher_running": String(isRunning), "switcher_awake": String(awake),
+         "switcher_session_active": String(sessionActive), "switcher_accessibility": String(hasAccessibility),
+         "switcher_keyboard_available": String(keyboardAvailable), "switcher_session_tap_enabled": String(keyboard.tapEnabled),
+         "switcher_shortcut_recording": String(recordingShortcut), "switcher_activation_pending": String(switching)]
+    }
 
     init(catalog: WindowSwitchCatalog = WindowCatalog(), keyboard: WindowKeyboardMonitor = WindowKeyboardMonitor(),
          environment: WindowSwitcherEnvironment = .live,
@@ -117,7 +129,7 @@ final class WindowSwitcherModel: ObservableObject {
                 let center = NSWorkspace.shared.notificationCenter
                 observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
                     guard let self, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-                    if self.isShowing && app.processIdentifier != self.originPID { self.cancel() }
+                    if self.isShowing && app.processIdentifier != self.originPID { self.cancel(reason: .focusChanged) }
                     self.refreshAvailability()
                     self.catalog.noteFocus(processID: app.processIdentifier)
                 })
@@ -205,6 +217,7 @@ final class WindowSwitcherModel: ObservableObject {
         isShowing = true; isLoading = true; items = []; selectedID = nil; message = "Finding windows…"
         initialDirection = reverse ? -1 : 1; pendingSteps = initialDirection; commitWhenLoaded = false
         keyboard.chooserOpen = true; keyboard.commitOnRelease = releaseToConfirm
+        DebugEventRecorder.shared.switcher("chooser_opened")
         onChooserVisibility?(true)
         if environment.nativeServices {
             if panel == nil { panel = WindowSwitcherPanel(model: self) }
@@ -213,13 +226,14 @@ final class WindowSwitcherModel: ObservableObject {
         let request = UUID(); requestID = request
         let opening: (WindowCatalog.Snapshot) -> Void = { [weak self] snapshot in
             guard let self, self.isShowing, self.requestID == request else { return }
-            guard self.environment.frontmostPID() == self.originPID else { self.cancel(); return }
+            guard self.environment.frontmostPID() == self.originPID else { self.cancel(reason: .focusChanged); return }
             self.previewCatalogItems = snapshot.windows
             self.items = WindowOrdering.candidates(snapshot.windows, settings: self.settings, currentProcessID: self.originPID)
             if self.settings.showsPreviews { self.previews.begin(items: snapshot.windows) }
             self.selection.begin(ids: self.items.map(\.id), focusedID: snapshot.focusedID, direction: self.initialDirection)
             self.selection.step(self.pendingSteps - self.initialDirection)
             self.selectedID = self.selection.selectedID; self.isLoading = false
+            DebugEventRecorder.shared.switcher("chooser_loaded", fields: ["empty": String(self.items.isEmpty)])
             self.message = self.items.isEmpty ? "No eligible windows were found. Open a window, then try again." :
                 (snapshot.unavailableApps > 0 ? "Some apps did not expose windows through Accessibility." : "")
             // Handles a quick press/release while the first AX enumeration is still running.
@@ -240,19 +254,31 @@ final class WindowSwitcherModel: ObservableObject {
     func confirm() {
         guard isShowing else { return }
         if isLoading { commitWhenLoaded = true; return }
-        guard let id = selection.selectedID else { cancel(); return }
+        guard let id = selection.selectedID else { cancel(reason: .noSelection); return }
         let origin = originPID
-        cancel(); switching = true
+        cancel(reason: .confirmed); switching = true
         let request = requestID
-        catalog.activate(id, expectedProcessID: origin) { [weak self] _ in
+        DebugEventRecorder.shared.switcher("activation_started")
+        catalog.activate(id, expectedProcessID: origin) { [weak self] result in
             guard let self, self.requestID == request else { return }
-            self.switching = false
+            self.finishActivation(result)
         }
     }
-    func cancel() {
+    private func finishActivation(_ result: Result<String, Error>) {
+        switching = false
+        switch result {
+        case .success: DebugEventRecorder.shared.switcher("activation_finished", fields: ["outcome": "succeeded"])
+        case .failure: DebugEventRecorder.shared.switcher("activation_finished", fields: ["outcome": "failed"])
+        }
+    }
+    func cancel() { cancel(reason: .cancelled) }
+
+    private func cancel(reason: CloseReason) {
         catalog.cancelPendingActivations()
         catalog.cancelPreviewMetadata(); metadataVisibleIDs = []
         previews.end(); previewCatalogItems = []; visiblePreviewIDs = []
+        if isShowing { DebugEventRecorder.shared.switcher("chooser_closed", fields: ["reason": reason.rawValue]) }
+        if switching { DebugEventRecorder.shared.switcher("activation_finished", fields: ["outcome": "cancelled"]) }
         switching = false
         requestID = UUID(); commitWhenLoaded = false; pendingSteps = 0
         refreshingOpenChooser = false
@@ -271,28 +297,49 @@ final class WindowSwitcherModel: ObservableObject {
         }
         guard !switching else { completion(.failure(ActionExecutor.ActionError.message("A window switch is already in progress."))); return }
         cancel(); switching = true
+        DebugEventRecorder.shared.switcher("activation_started")
         let request = UUID(); requestID = request
         let origin = environment.frontmostPID()
         catalog.refresh { [weak self] snapshot in
             guard let self else { return }
             guard self.isRunning, self.requestID == request, self.environment.frontmostPID() == origin else {
-                if self.requestID == request { self.switching = false }; completion(.failure(ActionExecutor.ActionError.message("Window switch cancelled."))); return
+                if self.requestID == request {
+                    self.switching = false
+                    DebugEventRecorder.shared.switcher("activation_finished", fields: ["outcome": "cancelled"])
+                }
+                completion(.failure(ActionExecutor.ActionError.message("Window switch cancelled."))); return
             }
             let items = WindowOrdering.candidates(snapshot.windows, settings: self.settings, currentProcessID: origin)
             guard let id = self.cycle.next(ids: items.map(\.id), focusedID: snapshot.focusedID,
                                            direction: action == .previousWindow ? -1 : 1, at: ProcessInfo.processInfo.systemUptime) else {
-                self.switching = false; completion(.failure(ActionExecutor.ActionError.message("No eligible windows were found."))); return
+                let result: Result<String, Error> = .failure(ActionExecutor.ActionError.message("No eligible windows were found."))
+                self.finishActivation(result); completion(result); return
             }
             self.catalog.activate(id, expectedProcessID: origin) { result in
-                if self.requestID == request { self.switching = false }; completion(result)
+                if self.requestID == request { self.finishActivation(result) }; completion(result)
             }
         }
     }
 
     private func handle(_ command: WindowKeyboardMonitor.Command) -> Bool {
-        guard isRunning, awake, sessionActive, hasAccessibility else { return false }
+        guard isRunning, awake, sessionActive, hasAccessibility else {
+            if case .begin = command, DebugEventRecorder.shared.isEnabled {
+                let reason: String
+                if !isRunning { reason = "switcher_stopped" }
+                else if !awake { reason = "asleep" }
+                else if !sessionActive { reason = "session_inactive" }
+                else { reason = "accessibility_unavailable" }
+                DebugEventRecorder.shared.switcher("shortcut_declined", fields: ["reason": reason])
+            }
+            return false
+        }
         switch command {
-        case let .begin(reverse): return show(reverse: reverse, releaseToConfirm: true)
+        case let .begin(reverse):
+            let opened = show(reverse: reverse, releaseToConfirm: true)
+            if !opened && switching {
+                DebugEventRecorder.shared.switcher("shortcut_declined", fields: ["reason": "activation_pending"])
+            }
+            return opened
         case let .step(direction): step(direction)
         case let .vertical(direction): step(settings.layout.verticalStep(direction, columns: gridColumns))
         case .confirm: confirm()

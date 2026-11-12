@@ -129,6 +129,7 @@ final class ProductivityModel: ObservableObject {
            let restored = ProductivitySection(rawValue: arguments[index + 1]), !trackpad.settingsNeedRecovery { section = restored }
         trackpad.setSelected(section == .trackpad)
         windows.onPreviewSetupRequested = { [weak self] in self?.openPreviewSetup() }
+        trackpad.switcherDebugContext = { [weak windows] in windows?.debugContext ?? [:] }
         trackpad.onWindowAction = { [weak self] action, completion in self?.windows.perform(action, completion: completion) }
         trackpad.onShowText = { [weak display] action in display?.text(action.displayText, duration: action.displayDuration) }
         trackpad.onToast = { [weak display] text in display?.toast(text) }

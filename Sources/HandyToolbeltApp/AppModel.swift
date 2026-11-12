@@ -13,6 +13,7 @@ enum TrackpadWorkspace: String, CaseIterable, Identifiable {
 }
 
 final class AppModel: ObservableObject {
+    var switcherDebugContext: (() -> [String: String])?
     @Published var configuration: AppConfiguration {
         didSet {
             cancelPendingGestures()
@@ -264,6 +265,10 @@ final class AppModel: ObservableObject {
         keyboardMonitor.onUnavailable = { [weak self] in self?.cancelPendingGestures() }
         keyboardMonitor.onPhysicalModifiersChanged = { [weak self] in self?.cancelPendingGestures() }
         keyboardMonitor.onPhysicalKeyDown = { [weak self] in self?.physicalKeyDown() }
+        keyboardMonitor.switcherShortcutForDiagnostics = { [weak self] in
+            guard let settings = self?.configuration.windowSwitcher, settings.isEnabled else { return nil }
+            return settings.shortcut
+        }
         executor.onShowText = { [weak self] action in self?.onShowText?(action) }
         selectedID = configuration.bindings.first?.id
         selectedGroupID = configuration.applicationGroups.first?.id
@@ -271,14 +276,21 @@ final class AppModel: ObservableObject {
         DebugEventRecorder.shared.contextProvider = { [weak self] in
             guard let self else { return [:] }
             let tuning = self.recognitionTuning(for: self.selectedDevice)
-            return ["accessibility": String(self.hasAccessibility), "session_active": String(self.inputSessionAvailable),
+            var context = ["accessibility": String(self.hasAccessibility), "session_active": String(self.inputSessionAvailable),
                 "gestures_enabled": String(self.configuration.trackpadModuleEnabled), "snapping_enabled": String(self.configuration.snappingModuleEnabled),
                 "selected_device_kind": self.selectedDevice.rawValue, "typing_cooldown_seconds": "0.5",
                 "tap_duration": String(tuning.tapDuration), "tap_travel": String(tuning.tapTravel),
                 "long_touch_duration": String(tuning.longTouchDuration), "double_tap_interval": String(tuning.doubleTapInterval),
                 "anchor_hold": String(tuning.anchorHold),
                 "swipe_travel": String(tuning.swipeTravel), "hand_angle_degrees": String(tuning.handAngleDegrees),
-                "tip_separation": String(tuning.tipSeparation), "tip_max_separation": String(tuning.tipMaxSeparation), "edge_deadzone": String(tuning.tipEdgeDeadzone)]
+                "tip_separation": String(tuning.tipSeparation), "tip_max_separation": String(tuning.tipMaxSeparation), "edge_deadzone": String(tuning.tipEdgeDeadzone),
+                "switcher_enabled": String(self.configuration.windowSwitcher.isEnabled),
+                "switcher_shortcut": self.configuration.windowSwitcher.shortcut.rawValue,
+                "switcher_hid_tap_enabled": String(self.keyboardMonitor.tapEnabled)]
+            if let switcherContext = self.switcherDebugContext?() {
+                context.merge(switcherContext, uniquingKeysWith: { _, current in current })
+            }
+            return context
         }
         DebugEventRecorder.shared.onEnabledChanged = { [weak self] in
             guard let self else { return }

@@ -8,11 +8,13 @@ final class GestureKeyboardMonitor {
     var onUnavailable: (() -> Void)?
     var onPhysicalModifiersChanged: (() -> Void)?
     var onPhysicalKeyDown: (() -> Void)?
+    var switcherShortcutForDiagnostics: (() -> WindowShortcut?)?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private static let keys: [(KeyboardModifier, CGKeyCode, CGEventFlags)] = [
         (.control, 59, .maskControl), (.option, 58, .maskAlternate), (.shift, 56, .maskShift), (.command, 55, .maskCommand)]
     var physicalModifiers: Set<KeyboardModifier> { physical }
+    var tapEnabled: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
     func startMonitoring() {
         guard tap == nil else { return }
         physical.removeAll()
@@ -23,8 +25,12 @@ final class GestureKeyboardMonitor {
                 guard let context else { return Unmanaged.passUnretained(event) }
                 let driver = Unmanaged<GestureKeyboardMonitor>.fromOpaque(context).takeUnretainedValue()
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    DebugEventRecorder.shared.switcher("tap_disabled",
+                        fields: ["tap": "hid", "reason": type == .tapDisabledByTimeout ? "timeout" : "user_input"])
                     driver.onUnavailable?()
                     if let tap = driver.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+                    DebugEventRecorder.shared.switcher("tap_recovery",
+                        fields: ["tap": "hid", "enabled": String(driver.tapEnabled)])
                 } else {
                     driver.routeKeyboardEvent(type: type, key: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
                         flags: event.flags, marker: event.getIntegerValueField(.eventSourceUserData))
@@ -36,12 +42,17 @@ final class GestureKeyboardMonitor {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
         }
+        DebugEventRecorder.shared.switcher("tap_start",
+            fields: ["tap": "hid", "created": String(tap != nil), "enabled": String(tapEnabled)])
     }
-    /// Shared by the native callback and hardware-free routing checks. Key identity
-    /// is used only to filter modifier events and never reaches diagnostics.
+    /// Shared by the native callback and hardware-free routing checks.
     func routeKeyboardEvent(type: CGEventType, key: CGKeyCode, flags: CGEventFlags, marker: Int64) {
         guard marker != ActionExecutor.eventMarker else { return }
         if type == .keyDown {
+            if DebugEventRecorder.shared.isEnabled,
+               switcherShortcutForDiagnostics?()?.matches(keyCode: key, flags: flags.rawValue) == true {
+                DebugEventRecorder.shared.switcher("hid_shortcut")
+            }
             if ![54, 55, 56, 57, 58, 59, 60, 61, 62, 63].contains(key) { onPhysicalKeyDown?() }
         } else if type == .flagsChanged {
             DebugEventRecorder.shared.record(category: .keyboard, event: "modifier_transition")
@@ -57,7 +68,10 @@ final class GestureKeyboardMonitor {
         if physical != previous { onPhysicalModifiersChanged?() }
     }
     func stopMonitoring() {
-        if let tap { CFMachPortInvalidate(tap) }
+        if let tap {
+            CFMachPortInvalidate(tap)
+            DebugEventRecorder.shared.switcher("tap_stop", fields: ["tap": "hid"])
+        }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil; source = nil; physical.removeAll()
     }
